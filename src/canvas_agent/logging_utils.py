@@ -47,6 +47,17 @@ class RedactingFilter(logging.Filter):
                     redact(str(a), self._secrets) if isinstance(a, str) else a
                     for a in record.args
                 )
+        # Scrub formatted exception text so logger.exception cannot leak secrets.
+        if record.exc_info:
+            try:
+                record.exc_text = redact(
+                    logging.Formatter().formatException(record.exc_info),
+                    self._secrets,
+                )
+            except Exception:
+                record.exc_text = "[exception redacted]"
+        elif isinstance(getattr(record, "exc_text", None), str):
+            record.exc_text = redact(record.exc_text, self._secrets)
         return True
 
 

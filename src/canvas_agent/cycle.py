@@ -209,6 +209,21 @@ class CycleOrchestrator:
         state.pending_writes = updated_pending
         self.storage.save(state)
 
+        # Re-check control immediately before the HTTP write (fail closed).
+        try:
+            control_status, _ = self.canvas.get_control_status()
+        except CanvasError:
+            logger.warning("Pre-write control fetch failed; aborting POST")
+            state = abandon_pending(self.storage.load(), current_pending.request_id)
+            self.storage.save(state)
+            return CycleResult(skipped_reason="control_fetch_failed")
+        if not may_post(control_status):
+            block = explain_block(control_status)
+            logger.info("Pre-write control gate blocked POST: %s", block)
+            state = abandon_pending(self.storage.load(), current_pending.request_id)
+            self.storage.save(state)
+            return CycleResult(skipped_reason=block)
+
         try:
             if current_pending.kind is WriteKind.ENTRY:
                 created = self.canvas.create_entry(current_pending.message_plain)
