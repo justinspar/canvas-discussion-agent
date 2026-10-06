@@ -2,9 +2,9 @@ name: Canvas Agent
 
 on:
   schedule:
-    # Every 3 hours at :21 UTC, aligned to 6:21 PM ET (22:21 UTC) and onward:
-    # 22:21, 01:21, 04:21, 07:21, 10:21, 13:21, 16:21, 19:21 UTC.
-    - cron: "21 1,4,7,10,13,16,19,22 * * *"
+    # Every 3 hours at :25 UTC, aligned to 6:25 PM ET (22:25 UTC) and onward:
+    # 22:25, 01:25, 04:25, 07:25, 10:25, 13:25, 16:25, 19:25 UTC.
+    - cron: "25 1,4,7,10,13,16,19,22 * * *"
   workflow_dispatch:
     inputs:
       dry_run:

@@ -9,7 +9,7 @@ Repo: https://github.com/justinspar/canvas-discussion-agent
 
 Evidence:
 - Workflow schedule: [`.github/workflows/canvas-agent.yml`](../.github/workflows/canvas-agent.yml)
-  - `cron: "21 1,4,7,10,13,16,19,22 * * *"` (every 3h at :21 UTC / e.g. 6:21 PM ET)
+  - `cron: "25 1,4,7,10,13,16,19,22 * * *"` (every 3h at :25 UTC / e.g. 6:25 PM ET)
   - `workflow_dispatch` for manual tests
   - `concurrency.group: canvas-agent` (no overlapping cycles)
   - `timeout-minutes: 15`
