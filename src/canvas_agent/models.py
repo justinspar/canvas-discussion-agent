@@ -89,3 +89,8 @@ class CycleResult(BaseModel):
     skipped_reason: str | None = None
     contribution: ContributionRecord | None = None
     error: str | None = None
+    # Evidence fields for graders / last_cycle.json
+    action: Literal["abstain", "post", "skip", "error"] | None = None
+    kind: WriteKind | None = None
+    parent_id: int | None = None
+    rationale: str | None = None

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from canvas_agent.canvas.client import (
     CanvasAmbiguousWriteError,
@@ -12,11 +13,13 @@ from canvas_agent.canvas.client import (
     CanvasTransientError,
 )
 from canvas_agent.config import Config
+from canvas_agent.evidence import write_cycle_evidence
 from canvas_agent.llm.protocol import LLMAdvisor
 from canvas_agent.logging_utils import redact
 from canvas_agent.models import (
     AgentState,
     CycleResult,
+    DiscussionSnapshot,
     WriteKind,
 )
 from canvas_agent.policy.idempotency import (
@@ -60,10 +63,25 @@ class CycleOrchestrator:
             max_per_cycle=1,
         )
 
+    def _evidence_path(self) -> Path:
+        return self.config.state_path.parent / "last_cycle.json"
+
+    def _record_evidence(self, result: CycleResult) -> CycleResult:
+        try:
+            write_cycle_evidence(self._evidence_path(), result)
+        except OSError as exc:
+            logger.warning("Could not write cycle evidence: %s", type(exc).__name__)
+        return result
+
     def run_once(self) -> CycleResult:
         state = self.storage.load()
         if state.stopped_reason:
-            return CycleResult(skipped_reason=f"stopped:{state.stopped_reason}")
+            return self._record_evidence(
+                CycleResult(
+                    skipped_reason=f"stopped:{state.stopped_reason}",
+                    action="skip",
+                )
+            )
 
         try:
             result = self._run_cycle(state)
@@ -71,7 +89,7 @@ class CycleOrchestrator:
             state.consecutive_failures = 0
             state.last_cycle_at = _utcnow()
             self.storage.save(state)
-            return result
+            return self._record_evidence(result)
         except Exception as exc:
             logger.exception("Cycle failed: %s", type(exc).__name__)
             state = self.storage.load()
@@ -85,7 +103,28 @@ class CycleOrchestrator:
                 )
             self.storage.save(state)
             secrets = [self.config.canvas_token, self.config.llm_api_key or ""]
-            return CycleResult(error=redact(str(exc), secrets))
+            return self._record_evidence(
+                CycleResult(
+                    error=redact(str(exc), secrets),
+                    action="error",
+                )
+            )
+
+    def _peer_parent(
+        self,
+        snapshot: DiscussionSnapshot,
+        parent_id: int | None,
+        agent_user_id: int | None,
+    ) -> tuple[bool, str | None, int | None]:
+        """Return (ok, skip_reason, parent_user_id)."""
+        if parent_id is None:
+            return False, "invalid_parent_id", None
+        parent = next((e for e in snapshot.entries if e.id == parent_id), None)
+        if parent is None:
+            return False, "invalid_parent_id", None
+        if agent_user_id is not None and parent.user_id == agent_user_id:
+            return False, "reply_to_self", parent.user_id
+        return True, None, parent.user_id
 
     def _run_cycle(self, state: AgentState) -> CycleResult:
         # Resolve agent identity
@@ -106,10 +145,7 @@ class CycleOrchestrator:
                 state.seen_entry_ids.append(entry.id)
         self.storage.save(state)
 
-        prior_messages = [
-            c.fingerprint[:12] for c in state.contributions
-        ]  # compact; full text from pending if needed
-        # Prefer actual prior message text from pending confirmed / contributions via snapshot
+        prior_messages = [c.fingerprint[:12] for c in state.contributions]
         own_texts = [
             e.message_text
             for e in snapshot.entries
@@ -127,26 +163,49 @@ class CycleOrchestrator:
             decision = validate_decision(decision)
         except OutputGuardError as exc:
             logger.info("Advisor output rejected: %s", exc)
-            return CycleResult(abstained=True, skipped_reason=f"invalid_draft:{exc}")
+            return CycleResult(
+                abstained=True,
+                skipped_reason=f"invalid_draft:{exc}",
+                action="abstain",
+                rationale=str(exc),
+            )
 
         if decision.action == "abstain":
             logger.info("Abstaining: %s", decision.rationale)
-            return CycleResult(abstained=True, skipped_reason="abstain")
+            return CycleResult(
+                abstained=True,
+                skipped_reason="abstain",
+                action="abstain",
+                rationale=decision.rationale,
+            )
 
         assert decision.kind is not None and decision.message is not None
 
-        # Validate reply parent exists and is not ourselves-only target weirdness
+        parent_user_id: int | None = None
         if decision.kind is WriteKind.REPLY:
-            parent_ids = {e.id for e in snapshot.entries}
-            if decision.parent_id not in parent_ids:
+            ok, skip, parent_user_id = self._peer_parent(
+                snapshot, decision.parent_id, state.agent_user_id
+            )
+            if not ok:
                 return CycleResult(
-                    abstained=True, skipped_reason="invalid_parent_id"
+                    abstained=True,
+                    skipped_reason=skip,
+                    action="skip",
+                    kind=decision.kind,
+                    parent_id=decision.parent_id,
+                    rationale=decision.rationale,
                 )
 
         allowed, reason = self.rate_limiter.allow(state.post_timestamps)
         if not allowed:
             logger.info("Rate limited: %s", reason)
-            return CycleResult(skipped_reason=reason)
+            return CycleResult(
+                skipped_reason=reason,
+                action="skip",
+                kind=decision.kind,
+                parent_id=decision.parent_id,
+                rationale=decision.rationale,
+            )
 
         fp = fingerprint_for(decision.message, decision.parent_id)
         if is_duplicate(
@@ -155,7 +214,13 @@ class CycleOrchestrator:
             snapshot=snapshot,
             agent_user_id=state.agent_user_id,
         ):
-            return CycleResult(skipped_reason="duplicate")
+            return CycleResult(
+                skipped_reason="duplicate",
+                action="skip",
+                kind=decision.kind,
+                parent_id=decision.parent_id,
+                rationale=decision.rationale,
+            )
 
         pending = create_pending(
             kind=decision.kind,
@@ -174,26 +239,44 @@ class CycleOrchestrator:
             )
             state = abandon_pending(self.storage.load(), pending.request_id)
             self.storage.save(state)
-            return CycleResult(skipped_reason="control_fetch_failed")
+            return CycleResult(
+                skipped_reason="control_fetch_failed",
+                action="skip",
+                kind=decision.kind,
+                parent_id=decision.parent_id,
+                rationale=decision.rationale,
+            )
 
         if not may_post(control_status):
             block = explain_block(control_status)
             logger.info("Write blocked by control gate: %s", block)
             state = abandon_pending(self.storage.load(), pending.request_id)
-            # For PAUSED/UNKNOWN we abandon the intent so we don't sticky-block forever
             self.storage.save(state)
-            return CycleResult(skipped_reason=block)
+            return CycleResult(
+                skipped_reason=block,
+                action="skip",
+                kind=decision.kind,
+                parent_id=decision.parent_id,
+                rationale=decision.rationale,
+            )
 
         if self.config.dry_run:
-            logger.info("Dry-run: would post %s parent=%s", pending.kind, pending.parent_id)
+            logger.info(
+                "Dry-run: would post %s parent=%s parent_user_id=%s",
+                pending.kind,
+                pending.parent_id,
+                parent_user_id,
+            )
             state = abandon_pending(self.storage.load(), pending.request_id)
-            # Keep fingerprint so dry-run doesn't propose the exact same text forever?
-            # Plan: dry-run does not write; do not pollute fingerprints as confirmed.
             self.storage.save(state)
             return CycleResult(
                 dry_run=True,
                 skipped_reason="dry_run",
                 posted=False,
+                action="post",
+                kind=decision.kind,
+                parent_id=decision.parent_id,
+                rationale=decision.rationale,
             )
 
         # Mark submitted_unknown BEFORE the POST so a crash mid-flight is recoverable
@@ -216,41 +299,61 @@ class CycleOrchestrator:
             logger.warning("Pre-write control fetch failed; aborting POST")
             state = abandon_pending(self.storage.load(), current_pending.request_id)
             self.storage.save(state)
-            return CycleResult(skipped_reason="control_fetch_failed")
+            return CycleResult(
+                skipped_reason="control_fetch_failed",
+                action="skip",
+                kind=decision.kind,
+                parent_id=decision.parent_id,
+                rationale=decision.rationale,
+            )
         if not may_post(control_status):
             block = explain_block(control_status)
             logger.info("Pre-write control gate blocked POST: %s", block)
             state = abandon_pending(self.storage.load(), current_pending.request_id)
             self.storage.save(state)
-            return CycleResult(skipped_reason=block)
+            return CycleResult(
+                skipped_reason=block,
+                action="skip",
+                kind=decision.kind,
+                parent_id=decision.parent_id,
+                rationale=decision.rationale,
+            )
 
         try:
             if current_pending.kind is WriteKind.ENTRY:
                 created = self.canvas.create_entry(current_pending.message_plain)
             else:
                 assert current_pending.parent_id is not None
+                logger.info(
+                    "Posting reply parent_id=%s parent_user_id=%s",
+                    current_pending.parent_id,
+                    parent_user_id,
+                )
                 created = self.canvas.create_reply(
                     current_pending.parent_id, current_pending.message_plain
                 )
             entry_id = int(created["id"])
         except (CanvasAmbiguousWriteError, CanvasTransientError):
-            # Lost acknowledgement / ambiguous write: leave submitted_unknown
             logger.warning(
                 "Write may have succeeded but ack was lost (request_id=%s)",
                 current_pending.request_id,
             )
-            return CycleResult(skipped_reason="lost_ack_pending")
+            return CycleResult(
+                skipped_reason="lost_ack_pending",
+                action="skip",
+                kind=decision.kind,
+                parent_id=decision.parent_id,
+                rationale=decision.rationale,
+            )
         except CanvasError as exc:
             logger.error("Canvas write failed: %s", type(exc).__name__)
             state = abandon_pending(self.storage.load(), current_pending.request_id)
             self.storage.save(state)
             raise
 
-        # Verify readback
         verified_payload = self.canvas.verify_entry(entry_id)
         verified = verified_payload is not None
         state = self.storage.load()
-        # Find pending again
         pending_now = next(
             p for p in state.pending_writes if p.request_id == current_pending.request_id
         )
@@ -269,7 +372,18 @@ class CycleOrchestrator:
                 posted=True,
                 contribution=contribution,
                 skipped_reason="unverified",
+                action="post",
+                kind=decision.kind,
+                parent_id=decision.parent_id,
+                rationale=decision.rationale,
             )
 
         logger.info("Posted and verified entry_id=%s", entry_id)
-        return CycleResult(posted=True, contribution=contribution)
+        return CycleResult(
+            posted=True,
+            contribution=contribution,
+            action="post",
+            kind=decision.kind,
+            parent_id=decision.parent_id,
+            rationale=decision.rationale,
+        )

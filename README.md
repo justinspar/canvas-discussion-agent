@@ -141,6 +141,8 @@ pytest
 5. **Reliability** — durable `agent-state` branch memory; idempotent writes; lost-ack reconcile; read retries; no blind POST retry.
 6. **Observability / ops** — dry-run, tests, concurrency lock, timeout, safe-stop after repeated failures.
 
+See **[docs/GRADING.md](docs/GRADING.md)** for the 2-pt grading checklist with reproducible evidence pointers.
+
 ## Residual risks
 
 - GitHub cron can be delayed on free/private plans
