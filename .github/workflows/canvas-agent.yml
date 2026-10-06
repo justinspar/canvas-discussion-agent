@@ -2,8 +2,9 @@ name: Canvas Agent
 
 on:
   schedule:
-    # Every 3 hours (UTC). GitHub may delay schedules slightly.
-    - cron: "0 */3 * * *"
+    # Every 3 hours, off the top of the hour. GitHub often delays/drops
+    # schedules at minute 0 under load; :17 UTC is more reliable.
+    - cron: "17 */3 * * *"
   workflow_dispatch:
     inputs:
       dry_run:

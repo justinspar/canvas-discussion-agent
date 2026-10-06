@@ -64,7 +64,7 @@ the default for `workflow_dispatch`.
 
 [`.github/workflows/canvas-agent.yml`](.github/workflows/canvas-agent.yml):
 
-- `schedule: cron "0 */3 * * *"` (every few hours, UTC; GitHub may delay)
+- `schedule: cron "17 */3 * * *"` (every few hours at :17 UTC; avoids top-of-hour drops)
 - `workflow_dispatch` for manual dry-run / live tests
 - `concurrency.group: canvas-agent` with `cancel-in-progress: false` so two
   posting cycles never overlap
