@@ -8,8 +8,8 @@ Repo: https://github.com/justinspar/canvas-discussion-agent
 **Status: fully meet**
 
 Evidence:
-- Workflow schedule: [`.github/workflows/canvas-agent.yml`](../.github/workflows/canvas-agent.yml)
-  - `cron: "25 1,4,7,10,13,16,19,22 * * *"` (every 3h at :25 UTC / e.g. 6:25 PM ET)
+- Workflow schedule: [`.github/workflows/canvas-agent-cron.yml`](../.github/workflows/canvas-agent-cron.yml)
+  - `cron: "34 1,4,7,10,13,16,19,22 * * *"` (every 3h at :25 UTC / e.g. 6:25 PM ET)
   - `workflow_dispatch` for manual tests
   - `concurrency.group: canvas-agent` (no overlapping cycles)
   - `timeout-minutes: 15`
@@ -19,7 +19,7 @@ Evidence:
 Reproduce:
 ```bash
 # Inspect schedule locally
-rg -n "cron:|concurrency:|timeout-minutes" .github/workflows/canvas-agent.yml
+rg -n "cron:|concurrency:|timeout-minutes" .github/workflows/canvas-agent-cron.yml
 ```
 
 ## 2. Correct Canvas integration + linked free-form participation (2 pts)

@@ -62,9 +62,9 @@ While the course team marks the forum as setup/API testing, posting stays gated
 by the control line (`PAUSED` / non-`RUNNING` → no write). Manual dry-run remains
 the default for `workflow_dispatch`.
 
-[`.github/workflows/canvas-agent.yml`](.github/workflows/canvas-agent.yml):
+[`.github/workflows/canvas-agent-cron.yml`](.github/workflows/canvas-agent-cron.yml):
 
-- `schedule: cron "25 1,4,7,10,13,16,19,22 * * *"` (every 3h at :25 UTC; e.g. 6:25 PM ET)
+- `schedule: cron every 3h at :34 UTC (+ temporary */5 probe)` (every 3h at :25 UTC; e.g. 6:25 PM ET)
 - `workflow_dispatch` for manual dry-run / live tests
 - `concurrency.group: canvas-agent` with `cancel-in-progress: false` so two
   posting cycles never overlap
