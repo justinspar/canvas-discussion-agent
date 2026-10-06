@@ -1,6 +1,10 @@
 """Canvas API package."""
 
-from canvas_agent.canvas.client import CanvasClient, CanvasError
+from canvas_agent.canvas.client import (
+    CanvasAmbiguousWriteError,
+    CanvasClient,
+    CanvasError,
+)
 from canvas_agent.canvas.parse import (
     content_fingerprint,
     html_to_text,
@@ -9,6 +13,7 @@ from canvas_agent.canvas.parse import (
 )
 
 __all__ = [
+    "CanvasAmbiguousWriteError",
     "CanvasClient",
     "CanvasError",
     "content_fingerprint",

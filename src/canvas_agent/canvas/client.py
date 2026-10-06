@@ -33,7 +33,11 @@ class CanvasNotFoundError(CanvasError):
 
 
 class CanvasTransientError(CanvasError):
-    pass
+    """Transient / ambiguous failure. Safe to retry for reads; not for blind write retries."""
+
+
+class CanvasAmbiguousWriteError(CanvasTransientError):
+    """Write may or may not have reached Canvas; do not retry POST—reconcile instead."""
 
 
 class CanvasClient:
@@ -113,15 +117,27 @@ class CanvasClient:
         *,
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
+        allow_retry: bool = True,
     ) -> httpx.Response:
+        """HTTP helper.
+
+        Reads may retry transient failures. Writes must pass allow_retry=False so a
+        lost acknowledgement cannot become a duplicate POST.
+        """
         self._assert_allowed(path)
+        max_attempts = self._max_retries + 1 if allow_retry else 1
         last_error: Exception | None = None
-        for attempt in range(self._max_retries + 1):
+        for attempt in range(max_attempts):
             try:
                 response = self._client.request(method, path, params=params, data=data)
             except (httpx.TimeoutException, httpx.NetworkError, httpx.TransportError) as exc:
-                last_error = CanvasTransientError(str(exc))
-                if attempt >= self._max_retries:
+                err_cls = (
+                    CanvasAmbiguousWriteError
+                    if method.upper() != "GET"
+                    else CanvasTransientError
+                )
+                last_error = err_cls(f"{type(exc).__name__}")
+                if attempt >= max_attempts - 1:
                     break
                 delay = self._backoff_seconds(attempt, None)
                 logger.warning(
@@ -145,7 +161,12 @@ class CanvasClient:
                 last_error = CanvasTransientError(
                     f"Canvas transient status {response.status_code}"
                 )
-                if attempt >= self._max_retries:
+                if not allow_retry or attempt >= max_attempts - 1:
+                    # Ambiguous for writes: server may have applied the POST.
+                    if method.upper() != "GET":
+                        raise CanvasAmbiguousWriteError(
+                            f"Canvas write got status {response.status_code}"
+                        )
                     break
                 delay = self._backoff_seconds(
                     attempt, response.headers.get("Retry-After")
@@ -169,14 +190,23 @@ class CanvasClient:
 
     def get_self_user_id(self) -> int:
         response = self._request("GET", endpoints.users_self())
-        payload = response.json()
-        return int(payload["id"])
+        try:
+            payload = response.json()
+            return int(payload["id"])
+        except (ValueError, KeyError, TypeError) as exc:
+            raise CanvasError("Malformed Canvas /users/self response") from exc
 
     def get_topic(self) -> dict[str, Any]:
         response = self._request(
             "GET", endpoints.discussion_topic(self.course_id, self.topic_id)
         )
-        return response.json()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise CanvasError("Malformed Canvas topic JSON") from exc
+        if not isinstance(payload, dict):
+            raise CanvasError("Malformed Canvas topic response")
+        return payload
 
     def get_control_status(self) -> tuple[Any, str]:
         topic = self.get_topic()
@@ -187,7 +217,12 @@ class CanvasClient:
         response = self._request(
             "GET", endpoints.discussion_view(self.course_id, self.topic_id)
         )
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise CanvasError("Malformed Canvas discussion view JSON") from exc
+        if not isinstance(payload, dict):
+            raise CanvasError("Malformed Canvas discussion view response")
         # Control line comes from topic fetch; view may not include topic message.
         topic = self.get_topic()
         message_html = topic.get("message") or ""
@@ -204,6 +239,8 @@ class CanvasClient:
     ) -> list[DiscussionEntry]:
         flat: list[DiscussionEntry] = []
         for node in nodes:
+            if not isinstance(node, dict) or "id" not in node:
+                raise CanvasError("Malformed Canvas discussion entry")
             entry_id = int(node["id"])
             created = node.get("created_at")
             created_at = None
@@ -227,34 +264,50 @@ class CanvasClient:
         return flat
 
     def create_entry(self, message: str) -> dict[str, Any]:
+        # Single attempt only — never blind-retry POSTs.
         response = self._request(
             "POST",
             endpoints.discussion_entries(self.course_id, self.topic_id),
             data={"message": message},
+            allow_retry=False,
         )
-        return response.json()
+        try:
+            payload = response.json()
+            int(payload["id"])
+        except (ValueError, KeyError, TypeError) as exc:
+            raise CanvasAmbiguousWriteError(
+                "Malformed create-entry response; reconcile before retry"
+            ) from exc
+        return payload
 
     def create_reply(self, entry_id: int, message: str) -> dict[str, Any]:
         response = self._request(
             "POST",
             endpoints.discussion_replies(self.course_id, self.topic_id, entry_id),
             data={"message": message},
+            allow_retry=False,
         )
-        return response.json()
+        try:
+            payload = response.json()
+            int(payload["id"])
+        except (ValueError, KeyError, TypeError) as exc:
+            raise CanvasAmbiguousWriteError(
+                "Malformed create-reply response; reconcile before retry"
+            ) from exc
+        return payload
 
     def get_entries_by_ids(self, entry_ids: list[int]) -> list[dict[str, Any]]:
         if not entry_ids:
             return []
         params: list[tuple[str, str]] = [("ids[]", str(i)) for i in entry_ids]
-        # httpx accepts list of tuples for repeated params
-        self._assert_allowed(endpoints.discussion_entry_list(self.course_id, self.topic_id))
-        last_error: Exception | None = None
         path = endpoints.discussion_entry_list(self.course_id, self.topic_id)
+        self._assert_allowed(path)
+        last_error: Exception | None = None
         for attempt in range(self._max_retries + 1):
             try:
                 response = self._client.get(path, params=params)
             except (httpx.TimeoutException, httpx.NetworkError, httpx.TransportError) as exc:
-                last_error = CanvasTransientError(str(exc))
+                last_error = CanvasTransientError(type(exc).__name__)
                 if attempt >= self._max_retries:
                     break
                 self._sleep(self._backoff_seconds(attempt, None))
@@ -275,7 +328,13 @@ class CanvasClient:
                 )
             if response.status_code >= 400:
                 raise CanvasError(f"Canvas error status {response.status_code}")
-            return response.json()
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise CanvasError("Malformed Canvas entry_list JSON") from exc
+            if not isinstance(payload, list):
+                raise CanvasError("Malformed Canvas entry_list response")
+            return payload
         assert last_error is not None
         raise last_error
 

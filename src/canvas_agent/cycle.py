@@ -5,9 +5,15 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from canvas_agent.canvas.client import CanvasClient, CanvasError, CanvasTransientError
+from canvas_agent.canvas.client import (
+    CanvasAmbiguousWriteError,
+    CanvasClient,
+    CanvasError,
+    CanvasTransientError,
+)
 from canvas_agent.config import Config
 from canvas_agent.llm.protocol import LLMAdvisor
+from canvas_agent.logging_utils import redact
 from canvas_agent.models import (
     AgentState,
     CycleResult,
@@ -78,7 +84,8 @@ class CycleOrchestrator:
                     state.consecutive_failures,
                 )
             self.storage.save(state)
-            return CycleResult(error=str(exc))
+            secrets = [self.config.canvas_token, self.config.llm_api_key or ""]
+            return CycleResult(error=redact(str(exc), secrets))
 
     def _run_cycle(self, state: AgentState) -> CycleResult:
         # Resolve agent identity
@@ -159,7 +166,16 @@ class CycleOrchestrator:
         self.storage.save(state)
 
         # Fresh control-line check immediately before EVERY write
-        control_status, _ = self.canvas.get_control_status()
+        try:
+            control_status, _ = self.canvas.get_control_status()
+        except CanvasError as exc:
+            logger.warning(
+                "Control-line fetch failed closed: %s", type(exc).__name__
+            )
+            state = abandon_pending(self.storage.load(), pending.request_id)
+            self.storage.save(state)
+            return CycleResult(skipped_reason="control_fetch_failed")
+
         if not may_post(control_status):
             block = explain_block(control_status)
             logger.info("Write blocked by control gate: %s", block)
@@ -202,8 +218,8 @@ class CycleOrchestrator:
                     current_pending.parent_id, current_pending.message_plain
                 )
             entry_id = int(created["id"])
-        except CanvasTransientError:
-            # Lost acknowledgement path: leave submitted_unknown
+        except (CanvasAmbiguousWriteError, CanvasTransientError):
+            # Lost acknowledgement / ambiguous write: leave submitted_unknown
             logger.warning(
                 "Write may have succeeded but ack was lost (request_id=%s)",
                 current_pending.request_id,

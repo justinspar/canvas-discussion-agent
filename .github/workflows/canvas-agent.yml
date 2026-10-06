@@ -11,17 +11,23 @@ on:
         type: boolean
         default: true
 
+# Prevent overlapping posting cycles (schedule + manual).
+concurrency:
+  group: canvas-agent
+  cancel-in-progress: false
+
 permissions:
-  actions: read
-  contents: read
+  contents: write
 
 jobs:
   cycle:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,15 +38,20 @@ jobs:
       - name: Install agent
         run: pip install .
 
-      - name: Restore agent memory
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          name: agent-state
-          path: data
-          workflow: canvas-agent.yml
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          search_artifacts: true
-          if_no_artifact_found: warn
+      - name: Restore durable state from agent-state branch
+        env:
+          STATE_BRANCH: agent-state
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          if git ls-remote --exit-code --heads origin "$STATE_BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$STATE_BRANCH"
+            git show "origin/${STATE_BRANCH}:agent_state.json" > data/agent_state.json
+            echo "Restored agent_state.json from origin/${STATE_BRANCH}"
+          else
+            echo '{}' > data/agent_state.json
+            echo "No ${STATE_BRANCH} branch yet; starting with empty state"
+          fi
 
       - name: Run one cycle
         env:
@@ -51,18 +62,51 @@ jobs:
           CANVAS_COURSE_ID: ${{ vars.CANVAS_COURSE_ID }}
           CANVAS_TOPIC_ID: ${{ vars.CANVAS_TOPIC_ID }}
           CANVAS_AGENT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true && '1' || '0' }}
+          CANVAS_AGENT_DATA_DIR: data
         run: |
+          set -euo pipefail
           mkdir -p data
-          if [ -z "$PARLEY_MODEL" ]; then unset PARLEY_MODEL; fi
-          if [ -z "$CANVAS_COURSE_ID" ]; then unset CANVAS_COURSE_ID; fi
-          if [ -z "$CANVAS_TOPIC_ID" ]; then unset CANVAS_TOPIC_ID; fi
+          if [ -z "${PARLEY_MODEL:-}" ]; then unset PARLEY_MODEL; fi
+          if [ -z "${CANVAS_COURSE_ID:-}" ]; then unset CANVAS_COURSE_ID; fi
+          if [ -z "${CANVAS_TOPIC_ID:-}" ]; then unset CANVAS_TOPIC_ID; fi
           python -m canvas_agent once
 
-      - name: Save agent memory
+      - name: Persist durable state to agent-state branch
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: agent-state
-          path: data/
-          retention-days: 30
-          if-no-files-found: warn
+        env:
+          STATE_BRANCH: agent-state
+        run: |
+          set -euo pipefail
+          if [ ! -f data/agent_state.json ]; then
+            echo "No state file to persist"
+            exit 0
+          fi
+
+          WORKTREE=$(mktemp -d)
+          cleanup() { rm -rf "$WORKTREE"; }
+          trap cleanup EXIT
+
+          git config user.name "canvas-agent[bot]"
+          git config user.email "canvas-agent[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --heads origin "$STATE_BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$STATE_BRANCH"
+            git worktree add --detach "$WORKTREE" "origin/${STATE_BRANCH}"
+          else
+            # Orphan branch: durable memory without polluting main history.
+            git worktree add --detach "$WORKTREE" "$(git rev-parse HEAD)"
+            git -C "$WORKTREE" checkout --orphan "$STATE_BRANCH"
+            git -C "$WORKTREE" rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          mkdir -p "$WORKTREE"
+          cp data/agent_state.json "$WORKTREE/agent_state.json"
+          # Never persist lock files or secrets into the state branch.
+          git -C "$WORKTREE" add agent_state.json
+          if git -C "$WORKTREE" diff --cached --quiet; then
+            echo "State unchanged; skipping push"
+            exit 0
+          fi
+          git -C "$WORKTREE" commit -m "chore: update agent state $(date -u +%Y-%m-%dT%H:%MZ)"
+          git -C "$WORKTREE" push origin "HEAD:${STATE_BRANCH}"
+          echo "Persisted agent_state.json to origin/${STATE_BRANCH}"
