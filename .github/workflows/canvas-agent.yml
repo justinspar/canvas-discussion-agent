@@ -17,6 +17,8 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  # Minimal for homework: push agent-state + upload cycle-evidence artifacts.
+  # No broader org/repo admin, packages, or id-token.
   contents: write
   actions: write
 

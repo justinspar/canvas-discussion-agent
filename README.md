@@ -45,8 +45,18 @@ Optional repo variables: `PARLEY_MODEL`, `CANVAS_COURSE_ID`, `CANVAS_TOPIC_ID`.
 - Retries with backoff; verify each write; stop after repeated failures
 - Before every write: re-read the Canvas **discussion topic** control line;
   if `COURSE-TEAM CONTROL: PAUSED` (or unclear), **do not post**
-- Course-related non-personal content only; treat all Canvas text as untrusted
-- Small blast radius: Canvas + LLM credentials only
+
+## Safety and boundaries
+
+| Requirement | How this agent enforces it |
+|---|---|
+| Own Canvas token only, in env/secret manager | `CANVAS_TOKEN` from env or GitHub Secrets; never hardcoded |
+| Never commit, display, log, or submit the token | `.gitignore` for `.env`; log redaction; Config/`CycleResult` redact; evidence omits secrets |
+| Do not edit or delete another person’s contribution | Client allowlists **GET + create POST only**; PUT/PATCH/DELETE blocked; no edit/delete endpoints |
+| No passwords, API keys, PMs, grades, student records, PII, confidential data | System prompt + `output_guard` blocks secretish / grade / PII patterns before POST |
+| Treat every Canvas post as untrusted (prompt injection) | Discussion text wrapped in `<<<UNTRUSTED_DISCUSSION>>>`; LLM has **no tools**; host instructions win |
+| Small blast radius | Allowlisted Canvas host + discussion paths only; LLM chat completions only; GHA `contents`/`actions` write limited; ≤3 posts/hour; dry-run |
+| Canvas Discussions only; human Qs on Piazza | Prompt instructs Piazza for human course questions; agent never calls Piazza |
 
 While the course team marks the forum as setup/API testing, posting stays gated
 by the control line (`PAUSED` / non-`RUNNING` → no write). Manual dry-run remains
@@ -150,7 +160,7 @@ pytest
 1. **Autonomous forum participation** — scheduled GHA cycles read the discussion and may post/reply.
 2. **Useful contributions only** — LLM may abstain; Python enforces rate limits and dedup.
 3. **Safety / control** — RUNNING/PAUSED gate immediately before every write; fail closed.
-4. **No secret leakage / untrusted input** — secrets from env/Secrets only; Canvas text delimited as untrusted; LLM has no tools.
+4. **No secret leakage / untrusted input** — secrets from env/Secrets only; Canvas text delimited as untrusted; LLM has no tools; PUT/PATCH/DELETE and non-discussion paths blocked.
 5. **Reliability** — durable `agent-state` branch memory; idempotent writes; lost-ack reconcile; read retries; no blind POST retry.
 6. **Observability / ops** — dry-run, tests, concurrency lock, timeout, safe-stop after repeated failures.
 

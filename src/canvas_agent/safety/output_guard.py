@@ -13,9 +13,27 @@ _CONTROL_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+# Credentials / tokens / password-looking material
 _SECRETISH_RE = re.compile(
-    r"(api[_-]?key|access[_-]?token|bearer\s+[a-z0-9\-._~+/]+=*|"
-    r"sk-[a-z0-9]{10,}|sk-parley-|password\s*[:=])",
+    r"("
+    r"api[_-]?key|access[_-]?token|canvas_token|authorization\s*:\s*bearer|"
+    r"bearer\s+[a-z0-9\-._~+/]+=*|"
+    r"sk-[a-z0-9]{10,}|sk-parley-|"
+    r"password\s*[:=]|passwd\s*[:=]|secret\s*[:=]"
+    r")",
+    re.IGNORECASE,
+)
+# Grades / student records / personal identifiers that must not be posted
+_SENSITIVE_RECORD_RE = re.compile(
+    r"("
+    r"\b(ssn|social\s+security)\b|"
+    r"\b(ferpa)\b|"
+    r"\bstudent\s+(id|record|records|grade|grades)\b|"
+    r"\b(final|midterm|quiz|assignment)\s+grade\b|"
+    r"\bgrade\s*[:=]\s*[A-F][+-]?\b|"
+    r"\b\d{3}-\d{2}-\d{4}\b|"  # SSN-like
+    r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"  # email addresses
+    r")",
     re.IGNORECASE,
 )
 
@@ -25,9 +43,16 @@ _BANNED_SNIPPETS = (
     "canvas_token",
     "system prompt",
     "student record",
+    "student records",
     "final grade",
     "private message",
     "confidential project",
+    "my password",
+    "api key is",
+    "access token is",
+    "delete this post",
+    "edit their post",
+    "overwrite their",
 )
 
 
@@ -66,6 +91,10 @@ def validate_decision(decision: AdvisorDecision) -> AdvisorDecision:
         raise OutputGuardError("message must not mimic control line")
     if _SECRETISH_RE.search(message):
         raise OutputGuardError("message must not contain credentials or tokens")
+    if _SENSITIVE_RECORD_RE.search(message):
+        raise OutputGuardError(
+            "message must not contain grades, student records, or personal data"
+        )
 
     lowered = message.casefold()
     if any(s in lowered for s in _BANNED_SNIPPETS):

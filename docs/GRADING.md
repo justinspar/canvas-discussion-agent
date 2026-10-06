@@ -83,14 +83,17 @@ pytest tests/test_peer_reply_validation.py -q
 Evidence:
 - Control line re-checked immediately before every write; PAUSED/UNKNOWN/fetch fail → no POST
 - Dry-run never writes; secrets only via GitHub Secrets / env; log redaction
-- Injection delimiters + output guard
+- Injection delimiters + output guard (credentials, grades, PII, banned snippets)
+- Canvas blast radius: host allowlist + discussion-path allowlist + GET/POST only
+  ([`safety/boundaries.py`](../src/canvas_agent/safety/boundaries.py)); no edit/delete
+- Prompts: untrusted-input rules + Piazza for human course questions
 - This document + automated tests + Actions artifacts
 
 Reproduce:
 ```bash
-pytest -q
+pytest tests/test_sanitize_injection.py tests/test_boundaries.py tests/test_control_gate.py -q
 python -m canvas_agent once --dry-run   # requires local .env; never posts
-rg -n "COURSE-TEAM CONTROL|dry_run|redact|UNTRUSTED_DISCUSSION" src/canvas_agent
+rg -n "COURSE-TEAM CONTROL|UNTRUSTED_DISCUSSION|assert_allowed_method|Piazza" src/canvas_agent
 ```
 
 ## Quick full local verification

@@ -14,6 +14,10 @@ import httpx
 from canvas_agent.canvas import endpoints
 from canvas_agent.canvas.parse import html_to_text, parse_control_status
 from canvas_agent.models import DiscussionEntry, DiscussionSnapshot
+from canvas_agent.safety.boundaries import (
+    assert_allowed_canvas_path,
+    assert_allowed_method,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +45,14 @@ class CanvasAmbiguousWriteError(CanvasTransientError):
 
 
 class CanvasClient:
-    """Deterministic Canvas API access. Exposes only GET + create POST."""
+    """Deterministic Canvas API access.
+
+    Blast radius:
+    - Own token from env/secrets only (never logged)
+    - Allowlisted Canvas host only
+    - GET + create POST only (no PUT/PATCH/DELETE → cannot edit/delete others)
+    - Homework discussion topic paths only
+    """
 
     def __init__(
         self,
@@ -59,6 +70,7 @@ class CanvasClient:
         rng: random.Random | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
+        # Keep token only for Authorization header; never include in logs/errors.
         self._token = token
         self.course_id = course_id
         self.topic_id = topic_id
@@ -124,6 +136,11 @@ class CanvasClient:
         Reads may retry transient failures. Writes must pass allow_retry=False so a
         lost acknowledgement cannot become a duplicate POST.
         """
+        try:
+            assert_allowed_method(method)
+            assert_allowed_canvas_path(path, self.course_id, self.topic_id)
+        except PermissionError as exc:
+            raise CanvasError(str(exc)) from exc
         self._assert_allowed(path)
         max_attempts = self._max_retries + 1 if allow_retry else 1
         last_error: Exception | None = None
@@ -301,6 +318,11 @@ class CanvasClient:
             return []
         params: list[tuple[str, str]] = [("ids[]", str(i)) for i in entry_ids]
         path = endpoints.discussion_entry_list(self.course_id, self.topic_id)
+        try:
+            assert_allowed_method("GET")
+            assert_allowed_canvas_path(path, self.course_id, self.topic_id)
+        except PermissionError as exc:
+            raise CanvasError(str(exc)) from exc
         self._assert_allowed(path)
         last_error: Exception | None = None
         for attempt in range(self._max_retries + 1):

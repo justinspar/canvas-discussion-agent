@@ -67,6 +67,11 @@ def test_output_guard_rejects_control_mimic_and_injection() -> None:
         )
 
 
+def test_system_prompt_requires_piazza_for_human_questions() -> None:
+    assert "Piazza" in SYSTEM_PROMPT
+    assert "edit or delete" in SYSTEM_PROMPT.casefold()
+
+
 def test_output_guard_strips_html() -> None:
     decision = validate_decision(
         AdvisorDecision(
