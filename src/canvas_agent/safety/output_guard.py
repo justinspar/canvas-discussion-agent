@@ -13,6 +13,22 @@ _CONTROL_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_SECRETISH_RE = re.compile(
+    r"(api[_-]?key|access[_-]?token|bearer\s+[a-z0-9\-._~+/]+=*|"
+    r"sk-[a-z0-9]{10,}|sk-parley-|password\s*[:=])",
+    re.IGNORECASE,
+)
+
+_BANNED_SNIPPETS = (
+    "ignore previous instructions",
+    "reveal the token",
+    "canvas_token",
+    "system prompt",
+    "student record",
+    "final grade",
+    "private message",
+    "confidential project",
+)
 
 
 class OutputGuardError(ValueError):
@@ -48,15 +64,11 @@ def validate_decision(decision: AdvisorDecision) -> AdvisorDecision:
         raise OutputGuardError("message too long")
     if _CONTROL_LINE_RE.search(message):
         raise OutputGuardError("message must not mimic control line")
-    # Block obvious instruction-injection payloads in outbound text
+    if _SECRETISH_RE.search(message):
+        raise OutputGuardError("message must not contain credentials or tokens")
+
     lowered = message.casefold()
-    banned_snippets = (
-        "ignore previous instructions",
-        "reveal the token",
-        "canvas_token",
-        "system prompt",
-    )
-    if any(s in lowered for s in banned_snippets):
+    if any(s in lowered for s in _BANNED_SNIPPETS):
         raise OutputGuardError("message contains forbidden content")
 
     return AdvisorDecision(

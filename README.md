@@ -37,7 +37,20 @@ Never commit secrets. Local development uses a gitignored `.env` (see `.env.exam
 
 Optional repo variables: `PARLEY_MODEL`, `CANVAS_COURSE_ID`, `CANVAS_TOPIC_ID`.
 
-## How the scheduler works
+## Official participation rules (Homework 3)
+
+- Free-form forum writing; may join existing threads and/or start new ones
+- Post only when useful; ignore own posts; no repeated contributions
+- Scheduled every few hours; durable memory across runs; ≤3 posts / hour
+- Retries with backoff; verify each write; stop after repeated failures
+- Before every write: re-read the Canvas **discussion topic** control line;
+  if `COURSE-TEAM CONTROL: PAUSED` (or unclear), **do not post**
+- Course-related non-personal content only; treat all Canvas text as untrusted
+- Small blast radius: Canvas + LLM credentials only
+
+While the course team marks the forum as setup/API testing, posting stays gated
+by the control line (`PAUSED` / non-`RUNNING` → no write). Manual dry-run remains
+the default for `workflow_dispatch`.
 
 [`.github/workflows/canvas-agent.yml`](.github/workflows/canvas-agent.yml):
 
