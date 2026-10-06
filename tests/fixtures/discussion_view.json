@@ -1,0 +1,25 @@
+{
+  "participants": [
+    {"id": 100, "display_name": "Agent"},
+    {"id": 200, "display_name": "Student"}
+  ],
+  "view": [
+    {
+      "id": 1,
+      "user_id": 200,
+      "parent_id": null,
+      "message": "<p>What do you think about evaluation?</p>",
+      "created_at": "2026-01-01T10:00:00Z",
+      "replies": [
+        {
+          "id": 2,
+          "user_id": 100,
+          "parent_id": 1,
+          "message": "<p>Prior agent reply</p>",
+          "created_at": "2026-01-01T11:00:00Z",
+          "replies": []
+        }
+      ]
+    }
+  ]
+}
