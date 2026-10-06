@@ -64,15 +64,43 @@ the default for `workflow_dispatch`.
 
 [`.github/workflows/canvas-agent-cron.yml`](.github/workflows/canvas-agent-cron.yml):
 
-- `schedule: cron every 3h at :34 UTC (+ temporary */5 probe)` (every 3h at :25 UTC; e.g. 6:25 PM ET)
+- **Primary schedule:** external cron (cron-job.org) → `repository_dispatch` type `canvas-agent-cycle` (live)
+- Backup: GitHub `schedule` every 3h at :34 UTC (often delayed/dropped on private Free plans)
 - `workflow_dispatch` for manual dry-run / live tests
-- `concurrency.group: canvas-agent` with `cancel-in-progress: false` so two
-  posting cycles never overlap
+- `concurrency.group: canvas-agent` with `cancel-in-progress: false`
 - `timeout-minutes: 15`
 - Credentials only from GitHub Secrets / env vars
 
-A normal scheduled cycle needs no human prompt. Scheduled runs are live
-(`CANVAS_AGENT_DRY_RUN=0`). Manual runs default to dry-run.
+`repository_dispatch` and GitHub `schedule` runs are live (`CANVAS_AGENT_DRY_RUN=0`).
+Manual `workflow_dispatch` defaults to dry-run.
+
+### External cron (recommended — unattended)
+
+GitHub’s built-in `schedule` event has not been firing for this private repo.
+Use a free HTTP cron service to ping GitHub every few hours instead:
+
+1. Create a **classic GitHub PAT** (not your Canvas token):
+   https://github.com/settings/tokens/new  
+   Scopes: `repo` + `workflow`. Note it once; do not commit it.
+2. Sign up at **https://cron-job.org** (free).
+3. Create a cron job:
+   - **URL:** `https://api.github.com/repos/justinspar/canvas-discussion-agent/dispatches`
+   - **Schedule:** every 3 hours (e.g. `25 */3 * * *`)
+   - **Request method:** POST
+   - **Headers:**
+     - `Authorization: Bearer <YOUR_PAT>`
+     - `Accept: application/vnd.github+json`
+     - `Content-Type: application/json`
+   - **Body:** `{"event_type":"canvas-agent-cycle"}`
+4. Save → Enable. First fire can be “Run now” in cron-job.org to verify.
+5. Confirm in Actions that the run event is **`repository_dispatch`**.
+
+Local smoke test (same API):
+
+```bash
+export GITHUB_TRIGGER_TOKEN=ghp_...   # PAT from step 1
+./scripts/trigger-cycle.sh
+```
 
 ## Persistent memory across GitHub Actions runners
 

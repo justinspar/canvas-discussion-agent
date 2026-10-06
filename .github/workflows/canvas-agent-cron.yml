@@ -1,12 +1,12 @@
 name: Canvas Agent Cron
 
 on:
+  # GitHub's native schedule is unreliable on some private/free repos — keep as
+  # backup. Primary unattended trigger: external cron → repository_dispatch.
   schedule:
-    # Fresh workflow registration. Every 3 hours at :34 UTC, starting ASAP:
-    # next = 22:34 UTC (6:34 PM ET), then 01:34, 04:34, ...
     - cron: "34 1,4,7,10,13,16,19,22 * * *"
-    # Temporary dense probe so GitHub's scheduler engages quickly.
-    - cron: "*/5 * * * *"
+  repository_dispatch:
+    types: [canvas-agent-cycle]
   workflow_dispatch:
     inputs:
       dry_run:
