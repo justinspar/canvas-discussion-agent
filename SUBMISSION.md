@@ -1,19 +1,21 @@
-# Homework 3 — Autonomous Canvas Discussion Agent (Submission Packet)
+# Homework 3 — Autonomous Canvas Discussion Agent
 
-**Student agent Canvas user id:** `192257`  
-**Course / topic:** MIT Canvas course `40577`, discussion topic `448963`  
-**Primary forum (all activity):** https://canvas.mit.edu/courses/40577/discussion_topics/448963  
+**What this is:** A small software agent that wakes up on a schedule, reads the Homework 3 Agent Discussion Forum on MIT Canvas, decides whether it has something useful to say, and—only then—posts a normal forum reply. No human prompt is required between runs.
 
-The linked Agent Discussion Forum activity is the primary evidence that the agent is working and participating autonomously.
+**Where to see it working (primary evidence):**  
+https://canvas.mit.edu/courses/40577/discussion_topics/448963  
+
+**Agent’s Canvas user id:** `192257`  
+**Course / discussion topic:** `40577` / `448963`
 
 ---
 
-## 1. Code repository and setup
+## 1. Code and how to run it
 
-**Repository (private):** https://github.com/justinspar/canvas-discussion-agent  
+**Public repository:** https://github.com/justinspar/canvas-discussion-agent  
 
-**Default branch:** `main`  
-**Durable memory branch:** `agent-state` → https://github.com/justinspar/canvas-discussion-agent/tree/agent-state  
+The full source, workflow, tests, and this write-up live there. Long-term memory is stored on a separate git branch so it survives across cloud runs:  
+https://github.com/justinspar/canvas-discussion-agent/tree/agent-state  
 
 ### Setup (local)
 
@@ -22,101 +24,132 @@ git clone https://github.com/justinspar/canvas-discussion-agent.git
 cd canvas-discussion-agent
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env   # set CANVAS_TOKEN, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL
+cp .env.example .env   # fill CANVAS_TOKEN, ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL
 set -a && source .env && set +a
-python -m canvas_agent once --dry-run
+python -m canvas_agent once --dry-run   # safe: reads/decides, never posts
 pytest -q
 ```
 
-### Setup (unattended hosting)
+### How it runs unattended
 
-1. GitHub Secrets on the repo: `CANVAS_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`
-2. Workflow: [`.github/workflows/canvas-agent-cron.yml`](.github/workflows/canvas-agent-cron.yml)  
-   - Triggered by **`repository_dispatch`** type `canvas-agent-cycle` (live)  
-   - Manual `workflow_dispatch` (dry-run by default)
-3. External scheduler: **cron-job.org** POSTs every few hours to  
-   `https://api.github.com/repos/justinspar/canvas-discussion-agent/dispatches`  
-   with body `{"event_type":"canvas-agent-cycle"}`  
-   (GitHub’s native `schedule` event was removed after it proved unreliable on this private repo.)
-4. Each run restores / persists `agent_state.json` on the `agent-state` branch and uploads artifact `cycle-evidence` (`last_cycle.json`).
+In production the agent does **not** live on a laptop. A free external timer ([cron-job.org](https://cron-job.org)) wakes GitHub Actions every few hours. GitHub then runs one cycle of the agent, using secrets stored only in GitHub Secrets (`CANVAS_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`). After each cycle it saves memory back to the `agent-state` branch and attaches a small evidence file (`last_cycle.json`) so graders can see whether that run posted or deliberately stayed quiet.
 
-Details: [README.md](README.md), [docs/GRADING.md](docs/GRADING.md).
+You can also trigger a cycle by hand from the Actions tab (dry-run by default). More detail lives in [README.md](README.md).
 
 ---
 
-## 2. Short architecture and autonomy description
+## 2. Architecture and autonomy (plain-language)
 
-```text
-cron-job.org (every few hours)
-  -> GitHub repository_dispatch (canvas-agent-cycle)
-       -> Actions runner
-            restore agent_state.json from branch agent-state
-            python -m canvas_agent once
-              CycleOrchestrator
-                StorageProtocol / JsonFileStorage     (local persistent memory)
-                CanvasClient                          (allowlisted host; GET + create POST only)
-                Control gate                          (COURSE-TEAM CONTROL: RUNNING|PAUSED)
-                RateLimiter                           (<=3 posts / hour; <=1 post / cycle)
-                Idempotency / pending reconcile       (fingerprints; lost-ack recovery)
-                LLMAdvisor (Parley/Claude)            (decide-and-draft only; no tools)
-                Output guard + verify_entry           (pre/post write checks)
-            upload cycle-evidence artifact
-            commit+push agent_state.json to agent-state
-```
+### What the agent is, and what it is trying to do
 
-| Concern | Implementation |
+Think of the agent as a careful discussion participant that shows up every few hours. Its job is not to post as often as possible. Its job is to **read the forum, remember what it has already said, and add something useful—or stay silent**.
+
+When a scheduled wake-up happens, it:
+
+1. Loads its memory of past posts and fingerprints  
+2. Reads the current Homework 3 discussion  
+3. Checks the course-team control line (`RUNNING` vs `PAUSED`)  
+4. Asks a language model whether there is something worth saying  
+5. If yes, drafts a short free-form reply (or new thread), checks safety rules, posts once, and verifies the post landed  
+6. If no, records an abstain and exits without writing to Canvas  
+7. Saves updated memory for the next wake-up  
+
+### Constraints (what it must not do)
+
+- Use **only its own** Canvas access token, kept in environment / GitHub Secrets—never committed or logged  
+- Treat every Canvas post as **untrusted** (possible prompt injection); forum text cannot override instructions or reveal secrets  
+- Never edit or delete anyone else’s contribution  
+- Never post passwords, API keys, grades, student records, or personal/confidential data  
+- Ignore its **own** prior posts and never repeat the same contribution  
+- Post at most **three times per hour**, and at most **once per wake-up**  
+- If the forum control line says **PAUSED** (or is unclear), **do not post**  
+- If something goes wrong repeatedly, **stop** rather than thrash  
+- Keep human course questions on Piazza; this agent only uses Canvas Discussions  
+
+### Tools and access it has (and does not have)
+
+The agent’s blast radius is intentionally small.
+
+**It can:**
+- Read the Homework 3 discussion topic and its replies on Canvas  
+- Create a new top-level post or a reply (create only)  
+- Call MIT Parley / Claude to decide and draft text  
+- Read and write its own memory file on the `agent-state` branch  
+
+**It cannot:**
+- Edit or delete posts (those Canvas APIs are blocked)  
+- Reach arbitrary websites or other Canvas resources  
+- Use tools, run shell commands, or expand its own permissions  
+- See secrets in its LLM prompt (tokens stay in the host process)  
+
+### Memory
+
+Between runs the agent keeps a simple durable notebook (`agent_state.json`): which Canvas entries it has seen, what it has posted (with content fingerprints), pending writes that might have been interrupted, and recent post times for rate limiting. Because GitHub’s machines are temporary, that notebook is committed to the `agent-state` branch after every cycle so the next run—hours later, on a different machine—picks up where it left off.
+
+### Architectural pieces that make this reliable
+
+| Piece | Role in plain language |
 |---|---|
-| **Scheduler** | cron-job.org → `repository_dispatch`; Actions history shows recurring unattended runs |
-| **Canvas access** | Own `CANVAS_TOKEN` from env/Secrets only; discussion topic paths only; no edit/delete |
-| **Decision logic** | LLM may `post` (entry/reply) or `abstain`; Python enforces peer-link, guards, limits |
-| **Local persistent memory** | `agent_state.json` on orphan branch `agent-state` (survives runner ephemerality) |
-| **Verification** | `verify_entry` after write; pending writes reconciled against Canvas view |
-| **Rate limits** | ≤3 posts / rolling hour; at most one post per cycle |
-| **Stopping rule** | After repeated consecutive cycle failures → `stopped_reason=max_failures` (safe stop) |
-| **Control line** | Re-read discussion topic before every write; `PAUSED` / unclear → no post |
+| **External scheduler (cron-job.org)** | Rings the doorbell every few hours with no human in the loop |
+| **GitHub Actions** | Provides a clean computer, secrets, and a log of each visit |
+| **Cycle orchestrator** | Runs one full “wake → decide → maybe post → remember” pass |
+| **Canvas client** | The only door to Canvas; limited to reading and creating discussion posts |
+| **Control gate** | Honors the course team’s RUNNING / PAUSED switch before any write |
+| **Language-model advisor** | Judges usefulness and drafts text; may abstain; has no tools |
+| **Output guard** | Blocks unsafe draft content before it can reach Canvas |
+| **Rate limiter** | Caps posting frequency so the agent stays a polite participant |
+| **Idempotency / recovery** | Remembers in-flight posts so a timeout cannot become a duplicate |
+| **Verification** | Re-reads Canvas after posting to confirm the entry exists |
+| **Stopping rule** | After repeated hard failures, parks the agent instead of looping |
+
+The design split is deliberate: **Python owns control and safety**; the **model only advises**. That way a creative draft cannot bypass rate limits, the pause switch, or duplicate protection.
 
 ---
 
-## 3. Links to forum threads the agent joined (autonomous posts / replies)
+## 3. Forum threads where the agent participated
 
-Forum hub: https://canvas.mit.edu/courses/40577/discussion_topics/448963  
+Start here (entire forum):  
+https://canvas.mit.edu/courses/40577/discussion_topics/448963  
 
-All autonomous contributions so far are **replies** (linked to peer parents). Deep links use Canvas `entry_id`:
+The agent has been joining **existing conversations** with free-form replies (not labeled templates). Each row links the agent’s post and the peer post it replied to:
 
-| # | Agent entry | Parent (peer) | Posted (UTC) | Thread link |
-|---|---|---|---|---|
-| 1 | [230495](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230495) | [230489](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230489) | 2026-10-06 16:26 | reply under peer entry 230489 |
-| 2 | [230689](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230689) | [230651](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230651) | 2026-10-06 22:30 | reply under peer entry 230651 |
-| 3 | [230762](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230762) | [230656](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230656) | 2026-10-07 01:47 | reply under peer entry 230656 |
-| 4 | [230766](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230766) | [230765](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230765) | 2026-10-07 02:01 | reply under peer entry 230765 |
-| 5 | [230837](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230837) | [230827](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230827) | 2026-10-07 04:00 | reply under peer entry 230827 |
-| 6 | [230893](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230893) | [230887](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230887) | 2026-10-07 06:00 | reply under peer entry 230887 |
-| 7 | [231038](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=231038) | [231019](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=231019) | 2026-10-07 14:01 | reply under peer entry 231019 |
-
-Durable record of the same IDs: [`agent-state` / `agent_state.json`](https://github.com/justinspar/canvas-discussion-agent/blob/agent-state/agent_state.json).
-
----
-
-## 4. Supporting activity evidence (multiple scheduled runs + deliberate non-post)
-
-**Actions overview:** https://github.com/justinspar/canvas-discussion-agent/actions  
-
-Recurring unattended runs are `repository_dispatch` from cron-job.org (examples):
-
-| When (UTC) | Event | Result | Evidence |
+| # | Agent’s reply | Replied to (peer) | When (UTC) |
 |---|---|---|---|
-| 2026-10-07 14:00 | `repository_dispatch` | **Posted** reply 231038 | [run 37633055467](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37633055467) |
-| 2026-10-07 12:00 | `repository_dispatch` | **Abstained** (chose not to post) | [run 37617917413](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37617917413) |
-| 2026-10-07 10:00 | `repository_dispatch` | success (cycle) | [run 37604435947](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37604435947) |
-| 2026-10-07 08:00 | `repository_dispatch` | success (cycle) | [run 37590877821](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37590877821) |
-| 2026-10-07 06:00 | `repository_dispatch` | **Posted** reply 230893 | [run 37579141451](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37579141451) |
-| 2026-10-07 04:00 | `repository_dispatch` | **Posted** reply 230837 | [run 37569353804](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37569353804) |
-| 2026-10-07 02:10 | `repository_dispatch` | **Abstained** (deliberate non-post) | [run 37560668252](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37560668252) |
-| 2026-10-07 02:00 | `repository_dispatch` | **Posted** reply 230766 | [run 37559844898](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37559844898) |
+| 1 | [Entry 230495](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230495) | [230489](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230489) | 2026-10-06 16:26 |
+| 2 | [Entry 230689](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230689) | [230651](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230651) | 2026-10-06 22:30 |
+| 3 | [Entry 230762](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230762) | [230656](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230656) | 2026-10-07 01:47 |
+| 4 | [Entry 230766](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230766) | [230765](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230765) | 2026-10-07 02:01 |
+| 5 | [Entry 230837](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230837) | [230827](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230827) | 2026-10-07 04:00 |
+| 6 | [Entry 230893](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230893) | [230887](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=230887) | 2026-10-07 06:00 |
+| 7 | [Entry 231038](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=231038) | [231019](https://canvas.mit.edu/courses/40577/discussion_topics/448963?entry_id=231019) | 2026-10-07 14:01 |
 
-### Example: deliberate abstain (no Canvas write)
+The same history is stored in durable memory:  
+https://github.com/justinspar/canvas-discussion-agent/blob/agent-state/agent_state.json  
 
-From artifact `cycle-evidence` / `last_cycle.json` on run [37560668252](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37560668252):
+---
+
+## 4. Evidence of scheduled autonomy (including choosing not to post)
+
+Canvas shows *what* was said. GitHub Actions shows *that the agent kept waking up on its own*, including visits where it correctly decided silence was better.
+
+**All runs:** https://github.com/justinspar/canvas-discussion-agent/actions  
+
+Examples of unattended cycles (fired by cron-job.org → GitHub):
+
+| When (UTC) | What happened | Open the run |
+|---|---|---|
+| 2026-10-07 14:00 | Posted reply 231038 | [View run](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37633055467) |
+| 2026-10-07 12:00 | Ran, then **chose not to post** | [View run](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37617917413) |
+| 2026-10-07 10:00 | Scheduled cycle completed | [View run](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37604435947) |
+| 2026-10-07 08:00 | Scheduled cycle completed | [View run](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37590877821) |
+| 2026-10-07 06:00 | Posted reply 230893 | [View run](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37579141451) |
+| 2026-10-07 04:00 | Posted reply 230837 | [View run](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37569353804) |
+| 2026-10-07 02:10 | **Deliberate abstain** (forum already dense; nothing new to add) | [View run](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37560668252) |
+| 2026-10-07 02:00 | Posted reply 230766 | [View run](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37559844898) |
+
+### A clear “chose not to post” example
+
+On run [37560668252](https://github.com/justinspar/canvas-discussion-agent/actions/runs/37560668252), the workflow finished successfully, but Canvas was unchanged. The cycle evidence file says the agent abstained on purpose:
 
 ```json
 {
@@ -129,23 +162,25 @@ From artifact `cycle-evidence` / `last_cycle.json` on run [37560668252](https://
 }
 ```
 
-Download any run’s **cycle-evidence** artifact from the Actions UI to inspect `last_cycle.json` (`posted`, `abstained`, `contribution_entry_id`, `parent_id`).
+In the Actions UI, download the **cycle-evidence** artifact on any run to see that run’s `last_cycle.json` (posted vs abstained, parent id, new entry id).
 
 ---
 
-## 5. Failure-and-recovery evidence (lost acknowledgement)
+## 5. Failure and recovery (without creating duplicate posts)
 
-**Injected failure:** simulated lost acknowledgement — Canvas accepts the write server-side, but the client receives a transient error / no ack (`FakeCanvas(fail_ack_once=True)`).
+Networks fail. The dangerous pattern is: Canvas actually accepts a post, the agent never hears the confirmation, and a naive retry creates a **duplicate**. This agent is built to avoid that.
 
-**Recovery behavior:**
-1. Before POST, pending write is marked `submitted_unknown` in durable state.
-2. Write path does **not** blind-retry POST (`allow_retry=False`).
-3. Next cycle / after restart: `reconcile_pending` matches fingerprint against Canvas view.
-4. Contribution is recorded; a second identical proposal is treated as **duplicate** (no second POST).
+**The injected failure we test:** pretend Canvas accepted the post, but the agent only sees a timeout / lost acknowledgement.
 
-**Protection against duplicate effects:** content fingerprints + pending reconcile + `is_duplicate` gate.
+**What the agent does instead of panicking:**
+1. Before sending, it notes “I am about to post this exact text” in durable memory.  
+2. It sends the post **once**—it does not keep hammering Canvas if the reply is unclear.  
+3. On the next wake-up (even after a full restart), it looks at the live forum, finds the post that matches its pending note, and marks the work complete.  
+4. If asked to send the same text again, it recognizes a duplicate and skips.
 
-### Reproduce (automated)
+So completed work is preserved, and the forum does not get a twin post.
+
+### How to reproduce the proof
 
 ```bash
 PYTHONPATH=src pytest \
@@ -154,25 +189,17 @@ PYTHONPATH=src pytest \
   tests/test_write_no_retry_on_timeout.py -q
 ```
 
-Expected: all pass. Key assertions in [`tests/test_idempotency_lost_ack.py`](tests/test_idempotency_lost_ack.py):
-
-- After lost ack: exactly **one** server-side post; pending `submitted_unknown` retained.
-- After reconcile: still **one** post; contribution verified; fingerprint recorded; no second POST.
-
-Also: malformed responses ([`tests/test_malformed_canvas_response.py`](tests/test_malformed_canvas_response.py)), write-timeout single attempt ([`tests/test_write_no_retry_on_timeout.py`](tests/test_write_no_retry_on_timeout.py)), restart durability ([`tests/test_persistence_restart.py`](tests/test_persistence_restart.py)).
-
-Implementation: [`src/canvas_agent/policy/idempotency.py`](src/canvas_agent/policy/idempotency.py), [`src/canvas_agent/cycle.py`](src/canvas_agent/cycle.py).
+These tests pass and assert: after a lost acknowledgement there is still exactly one server-side post; after recovery the contribution is recorded; a second attempt does not create another post. Related coverage includes malformed Canvas responses and restart-safe storage.
 
 ---
 
-## 6. Quick grader checklist
+## 6. Grader map
 
-| Requirement | Where to look |
+| What you asked for | Where it is |
 |---|---|
-| Autonomous forum participation | Canvas topic + entry links in §3 |
-| Code + setup | This repo + §1 |
-| Architecture / autonomy | §2 |
-| Multiple scheduled runs | §4 Actions links |
-| Deliberate non-post | §4 abstain `last_cycle.json` |
-| Failure recovery / no duplicates | §5 pytest + idempotency tests |
-| Control line / safety | [README.md](README.md) Safety section; [docs/GRADING.md](docs/GRADING.md) |
+| Autonomous forum activity | Canvas topic + reply links in §3 |
+| Code / setup | Public repo in §1 |
+| Architecture, constraints, tools, memory | Narrative in §2 |
+| Multiple scheduled runs + a deliberate non-post | §4 |
+| Failure recovery without duplicates | §5 |
+| Extra safety / control-line detail | [README.md](README.md), [docs/GRADING.md](docs/GRADING.md) |
