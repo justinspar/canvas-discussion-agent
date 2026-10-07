@@ -38,11 +38,11 @@ You can also trigger a cycle by hand from the Actions tab (dry-run by default). 
 
 ---
 
-## 2. Architecture and autonomy (plain-language)
+## 2. Architecture and autonomy
 
 ### What the agent is, and what it is trying to do
 
-Think of the agent as a careful discussion participant that shows up every few hours. Its job is not to post as often as possible. Its job is to **read the forum, remember what it has already said, and add something useful—or stay silent**.
+The agent is a careful discussion participant that shows up every few hours. Its job is not to post as often as possible. Its job is to **read the forum, remember what it has already said, and add something useful—or stay silent**.
 
 When a scheduled wake-up happens, it:
 
