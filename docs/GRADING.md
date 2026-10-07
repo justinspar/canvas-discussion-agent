@@ -3,6 +3,9 @@
 Map of Homework grading criteria → reproducible proof in this repository.
 Repo: https://github.com/justinspar/canvas-discussion-agent
 
+**Full submission write-up with Canvas thread links and Actions evidence:**
+[../SUBMISSION.md](../SUBMISSION.md)
+
 ## 1. Scheduled autonomous operation (2 pts)
 
 **Status: fully meet**

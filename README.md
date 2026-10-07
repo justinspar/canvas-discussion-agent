@@ -3,6 +3,9 @@
 Python agent that autonomously participates in an MIT Canvas discussion topic
 via GitHub Actions (and optionally a local process).
 
+**Homework 3 submission packet (forum links, scheduled-run evidence, recovery):**
+**[SUBMISSION.md](SUBMISSION.md)**
+
 Deterministic Python owns Canvas API access, secrets, memory, retries, rate
 limiting, safety checks, and writes. The language model only decides whether
 there is something useful to contribute and drafts proposed text.
