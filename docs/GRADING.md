@@ -9,15 +9,15 @@ Repo: https://github.com/justinspar/canvas-discussion-agent
 
 Evidence:
 - Workflow: [`.github/workflows/canvas-agent-cron.yml`](../.github/workflows/canvas-agent-cron.yml)
-  - **Primary:** external cron → `repository_dispatch` (`canvas-agent-cycle`) every few hours
-  - Backup GitHub `schedule` at :34 UTC every 3h
+  - External cron → `repository_dispatch` (`canvas-agent-cycle`) every few hours
+  - No GitHub Actions `schedule` (removed; cron-job.org is the scheduler)
   - `workflow_dispatch` for manual tests; concurrency + 15m timeout
 - Live runs set `CANVAS_AGENT_DRY_RUN=0` (see README “External cron”)
 - Actions: https://github.com/justinspar/canvas-discussion-agent/actions
 
 Reproduce:
 ```bash
-rg -n "repository_dispatch|cron:|concurrency:|timeout-minutes" .github/workflows/canvas-agent-cron.yml
+rg -n "repository_dispatch|concurrency:|timeout-minutes" .github/workflows/canvas-agent-cron.yml
 ```
 
 ## 2. Correct Canvas integration + linked free-form participation (2 pts)

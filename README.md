@@ -64,20 +64,19 @@ the default for `workflow_dispatch`.
 
 [`.github/workflows/canvas-agent-cron.yml`](.github/workflows/canvas-agent-cron.yml):
 
-- **Primary schedule:** external cron (cron-job.org) → `repository_dispatch` type `canvas-agent-cycle` (live)
-- Backup: GitHub `schedule` every 3h at :34 UTC (often delayed/dropped on private Free plans)
+- **Schedule:** external cron (cron-job.org) → `repository_dispatch` type `canvas-agent-cycle` (live)
 - `workflow_dispatch` for manual dry-run / live tests
 - `concurrency.group: canvas-agent` with `cancel-in-progress: false`
 - `timeout-minutes: 15`
 - Credentials only from GitHub Secrets / env vars
+- No GitHub Actions `schedule` trigger (disabled; external cron is the source of truth)
 
-`repository_dispatch` and GitHub `schedule` runs are live (`CANVAS_AGENT_DRY_RUN=0`).
+`repository_dispatch` runs are live (`CANVAS_AGENT_DRY_RUN=0`).
 Manual `workflow_dispatch` defaults to dry-run.
 
-### External cron (recommended — unattended)
+### External cron (unattended)
 
-GitHub’s built-in `schedule` event has not been firing for this private repo.
-Use a free HTTP cron service to ping GitHub every few hours instead:
+Use a free HTTP cron service to ping GitHub every few hours:
 
 1. Create a **classic GitHub PAT** (not your Canvas token):
    https://github.com/settings/tokens/new  

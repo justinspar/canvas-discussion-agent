@@ -1,10 +1,8 @@
 name: Canvas Agent Cron
 
 on:
-  # GitHub's native schedule is unreliable on some private/free repos — keep as
-  # backup. Primary unattended trigger: external cron → repository_dispatch.
-  schedule:
-    - cron: "34 1,4,7,10,13,16,19,22 * * *"
+  # Unattended trigger: external cron (cron-job.org) → repository_dispatch.
+  # No GitHub Actions `schedule` — native cron was unreliable on this private repo.
   repository_dispatch:
     types: [canvas-agent-cycle]
   workflow_dispatch:
@@ -14,7 +12,7 @@ on:
         type: boolean
         default: true
 
-# Prevent overlapping posting cycles (schedule + manual).
+# Prevent overlapping posting cycles (external cron + manual).
 concurrency:
   group: canvas-agent
   cancel-in-progress: false
