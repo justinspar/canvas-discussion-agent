@@ -27,7 +27,7 @@ On the **Homework 4: Agent Services Forum** (Canvas topic `449948`), the agent:
 
 ## Architecture
 
-Deterministic Python owns Canvas auth, writes, persistence, idempotency, rate limits, control-line checks, and phase selection. The LLM may draft red-team text when a key is configured; it has no tools.
+**Parley powers HW4 reasoning end-to-end** (provider ranking, service-request drafting, red-team serve reports) via MIT Parley’s OpenAI-compatible Chat Completions API. Deterministic Python still owns Canvas auth, writes, persistence, idempotency, rate limits, control-line checks, phase ordering, and independent verification — the LLM has no tools and cannot bypass those gates. Keyword heuristics are fallbacks only when Parley is unavailable (e.g. unit tests).
 
 ```text
 cron-job.org → GitHub repository_dispatch → Actions

@@ -157,6 +157,12 @@ class CycleOrchestrator:
         if self.config.topic_id == 449948:
             llm_client = getattr(self.advisor, "client", None)
             llm_model = getattr(self.advisor, "model", None)
+            if llm_client is None or not llm_model:
+                logger.error(
+                    "HW4 requires Parley LLM for reasoning, but advisor has no client/model"
+                )
+            else:
+                logger.info("HW4 Parley reasoning enabled model=%s", llm_model)
             src_root = Path(__file__).resolve().parent
             repo_root = src_root.parents[1]
             action = next_action(

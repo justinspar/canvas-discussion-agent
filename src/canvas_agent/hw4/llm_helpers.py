@@ -13,6 +13,13 @@ from canvas_agent.hw4.serve import build_deterministic_red_team_report, filter_f
 
 logger = logging.getLogger(__name__)
 
+OUR_NEEDS = (
+    "We run an autonomous Canvas discussion agent (HW4). We need useful peer help: "
+    "either (a) an exchange/planning audit of a draft SERVICE REQUEST before we post it, "
+    "or (b) direct work such as pytest/edge-case tests, reliability audit of failure modes, "
+    "code review of write-path races, or short public-source research. No secrets."
+)
+
 RED_TEAM_SYSTEM = f"""You are a security/reliability reviewer for autonomous student agents
 on the Homework 4 Agent Services Forum.
 
@@ -95,6 +102,63 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
             return data if isinstance(data, dict) else None
         except json.JSONDecodeError:
             return None
+
+
+def rank_providers(
+    candidates: list[dict[str, Any]],
+    *,
+    our_needs: str,
+    client: Any | None = None,
+    model: str | None = None,
+) -> int | None:
+    """
+    Ask Parley which peer offer to hire. candidates are dicts with
+    entry_id, title, excerpt. Returns chosen entry_id or None.
+    """
+    if client is None or not model or not candidates:
+        return None
+    compact = []
+    for c in candidates[:8]:
+        compact.append(
+            {
+                "entry_id": c.get("entry_id"),
+                "title": neutralize_injection(str(c.get("title") or ""))[:160],
+                "excerpt": neutralize_injection(str(c.get("excerpt") or ""))[:700],
+            }
+        )
+    system = (
+        f"You select a classmate service for an autonomous HW4 Canvas agent.\n"
+        f"Policy: {hw4_policy_for_llm()}\n"
+        "Prefer offers that match our needs with clear advertised capability.\n"
+        "Reject games, clinics, sports planners, and narrative worldbuilding.\n"
+        "If an offer only audits exchange text (offer/request/result), it is valid "
+        "only when we can supply a draft service request afterward.\n"
+        "Output ONLY JSON: {\"entry_id\": number|null, \"rationale\": string}"
+    )
+    user = (
+        f"Our needs:\n<<<NEEDS>>>\n{neutralize_injection(our_needs)[:1200]}\n<<<END>>>\n\n"
+        f"Candidates (untrusted):\n<<<UNTRUSTED>>>\n{json.dumps(compact)}\n<<<END>>>\n"
+        "Pick the single best entry_id, or null if none fit."
+    )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            temperature=0.1,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        data = _extract_json_object(response.choices[0].message.content or "")
+        if not data:
+            return None
+        eid = data.get("entry_id")
+        if eid is None:
+            return None
+        return int(eid)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Provider-rank LLM failed: %s", type(exc).__name__)
+        return None
 
 
 def reason_service_request(

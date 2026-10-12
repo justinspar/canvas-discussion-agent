@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from canvas_agent.hw4.offer import LEGACY_SERVICE_TITLE, SERVICE_TITLE
 from canvas_agent.hw4.sanitize_peer import neutralize_injection
 from canvas_agent.models import DiscussionSnapshot, ProviderCandidate
@@ -226,9 +228,36 @@ def list_candidate_providers(
 
 def select_provider(
     candidates: list[ProviderCandidate],
+    *,
+    llm_client: Any | None = None,
+    llm_model: str | None = None,
+    our_needs: str | None = None,
 ) -> ProviderCandidate | None:
+    """Pick a provider; Parley ranks when available, else highest keyword score."""
     if not candidates:
         return None
+    if llm_client is not None and llm_model:
+        from canvas_agent.hw4.llm_helpers import OUR_NEEDS, rank_providers
+
+        payload = [
+            {
+                "entry_id": c.entry_id,
+                "title": c.title_snippet,
+                "excerpt": c.offer_excerpt or c.title_snippet,
+            }
+            for c in candidates
+        ]
+        chosen_id = rank_providers(
+            payload,
+            our_needs=our_needs or OUR_NEEDS,
+            client=llm_client,
+            model=llm_model,
+        )
+        if chosen_id is not None:
+            for c in candidates:
+                if c.entry_id == chosen_id:
+                    c.reason = (c.reason or "") + ",llm_rank"
+                    return c
     return candidates[0]
 
 

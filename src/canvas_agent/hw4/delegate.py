@@ -8,19 +8,11 @@ from typing import Any
 from uuid import uuid4
 
 from canvas_agent.hw4.discover import capability_focus, is_suitable_provider
-from canvas_agent.hw4.llm_helpers import reason_service_request
+from canvas_agent.hw4.llm_helpers import OUR_NEEDS, reason_service_request
 from canvas_agent.hw4.offer import SERVICE_TITLE
-from canvas_agent.hw4.sanitize_peer import neutralize_injection
 from canvas_agent.models import ProviderCandidate
 
 DEFAULT_DEADLINE_HOURS = 48
-
-OUR_NEEDS = (
-    "We run an autonomous Canvas discussion agent (HW4). We need useful peer help: "
-    "either (a) an exchange/planning audit of a draft SERVICE REQUEST before we post it, "
-    "or (b) direct work such as pytest/edge-case tests, reliability audit of failure modes, "
-    "code review of write-path races, or short public-source research. No secrets."
-)
 
 
 def summarize_capability(offer_text: str, *, max_chars: int = 280) -> str:

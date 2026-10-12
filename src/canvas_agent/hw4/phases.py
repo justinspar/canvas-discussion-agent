@@ -240,7 +240,15 @@ def next_action(
                 DelegationStatus.REJECTED,
             }
         ):
-            chosen = discover.select_provider(candidates)
+            if llm_client is None or not llm_model:
+                logger.warning(
+                    "HW4 provider selection without Parley LLM; using keyword fallback"
+                )
+            chosen = discover.select_provider(
+                candidates,
+                llm_client=llm_client,
+                llm_model=llm_model,
+            )
             if chosen is None:
                 return Hw4Idle(phase="discover_provider", rationale="no_suitable_provider")
             # Exchange auditors require a draft service request to a worker peer.
