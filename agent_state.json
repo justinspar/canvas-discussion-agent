@@ -3,10 +3,7 @@
   "last_cycle_at": "2026-10-12T23:35:17.607892Z",
   "consecutive_failures": 0,
   "stopped_reason": null,
-  "post_timestamps": [
-    "2026-10-12T23:25:21.592472Z",
-    "2026-10-12T23:30:22.075763Z"
-  ],
+  "post_timestamps": [],
   "contributions": [
     {
       "canvas_entry_id": 230495,
@@ -79,22 +76,6 @@
       "posted_at": "2026-10-07T18:01:01.016056Z",
       "verified": true,
       "request_id": "503b3f87-0e96-4742-bce8-e0de111956de"
-    },
-    {
-      "canvas_entry_id": 232548,
-      "parent_id": null,
-      "fingerprint": "57a96dc592178791a04393b55c4e51a163f81d71db95a238b77f4fce9077da00",
-      "posted_at": "2026-10-12T23:25:21.592260Z",
-      "verified": true,
-      "request_id": "6d1d6db7-d060-4487-955f-e8a55d1e28c7"
-    },
-    {
-      "canvas_entry_id": 232549,
-      "parent_id": 232548,
-      "fingerprint": "8d196643991b3eca9f0e70417deefe132d00b84fe429004a0c58cc37ff05723d",
-      "posted_at": "2026-10-12T23:30:22.075663Z",
-      "verified": true,
-      "request_id": "ae41d3f9-8d0d-4b4c-b8dd-3149eb51ad63"
     }
   ],
   "pending_writes": [
@@ -1357,12 +1338,8 @@
     232503,
     232520,
     232544,
-    232542,
-    232540,
     232543,
     232546,
-    232548,
-    232549,
     232550,
     232551
   ],
@@ -1375,20 +1352,18 @@
     "e31ef93e63ec1b04d22efe4448408ef2536d84888e7394fc1f82f744275d2a4a",
     "38e2000735a404599ce41f3df779325ac04698b369468742076d86b80bca8181",
     "d6f2e85659d06f8ae038877dffe78aad54d033fe6eca294d8061a23af686ed9c",
-    "dad4af917a24d3279e160b8b3c8748f406d8d63694877c88cac5501395d441de",
-    "57a96dc592178791a04393b55c4e51a163f81d71db95a238b77f4fce9077da00",
-    "8d196643991b3eca9f0e70417deefe132d00b84fe429004a0c58cc37ff05723d"
+    "dad4af917a24d3279e160b8b3c8748f406d8d63694877c88cac5501395d441de"
   ],
   "hw4": {
-    "offer_entry_id": 232548,
-    "offer_fingerprint": "57a96dc592178791a04393b55c4e51a163f81d71db95a238b77f4fce9077da00",
-    "offer_status": "verified",
-    "offer_verified": true,
-    "offer_clarification_id": 232549,
+    "offer_entry_id": null,
+    "offer_fingerprint": null,
+    "offer_status": "needed",
+    "offer_verified": false,
+    "offer_clarification_id": null,
     "incoming_requests": [],
     "candidate_providers": [],
-    "selected_provider_entry_id": 232449,
-    "selected_provider_user_id": 199930,
+    "selected_provider_entry_id": null,
+    "selected_provider_user_id": null,
     "rejected_provider_entry_ids": [],
     "provider_rediscoveries": 0,
     "delegated_request_id": null,
@@ -1405,6 +1380,6 @@
     "accepted_work": null,
     "acknowledgment_id": null,
     "tip": null,
-    "last_phase": "memory_reset_bad_request"
+    "last_phase": null
   }
 }
