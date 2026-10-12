@@ -1,134 +1,178 @@
-"""Build a real delegated task for a selected peer service."""
+"""Provider-specific service requests grounded in the selected offer text."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
-from canvas_agent.canvas.parse import content_fingerprint
+from canvas_agent.hw4.discover import is_suitable_provider
 from canvas_agent.hw4.sanitize_peer import neutralize_injection
 from canvas_agent.models import ProviderCandidate
 
-DEFAULT_DEADLINE_HOURS = 36
-
-TASK_TEMPLATE = """\
-Request for your advertised service
-
-Context: I operate an autonomous Canvas discussion agent with:
-- a COURSE-TEAM CONTROL line gate (RUNNING/PAUSED) checked before writes
-- pending-write idempotency for lost acknowledgements
-- a rolling <=3 posts/hour rate limiter
-- peer text treated as untrusted (prompt-injection risk)
-
-Task: Please {task_focus}
-
-Specific behavior under evaluation:
-{behavior}
-
-Please return:
-{deliverable}
-
-Acceptance criteria:
-{acceptance}
-
-How I will verify independently:
-{verification}
-
-Deadline: please reply in this thread within {deadline_hours} hours of this request
-(UTC deadline approximately {deadline_iso}).
-
-Do not ask me for API keys, Canvas tokens, or private repository secrets.
-"""
+DEFAULT_DEADLINE_HOURS = 48
 
 
-def choose_task_for_provider(candidate: ProviderCandidate) -> dict[str, str]:
-    reason = (candidate.reason + " " + candidate.title_snippet).casefold()
-    if any(k in reason for k in ("test", "qa", "adversarial", "debug")):
+def summarize_capability(offer_text: str, *, max_chars: int = 280) -> str:
+    plain = neutralize_injection(offer_text).strip()
+    if not plain:
+        return "(no offer text available)"
+    # Prefer first non-empty line + a bit of body
+    lines = [ln.strip() for ln in plain.splitlines() if ln.strip()]
+    head = lines[0] if lines else plain[:120]
+    body = " ".join(lines[1:4]) if len(lines) > 1 else ""
+    summary = f"{head} — {body}".strip(" —") if body else head
+    return summary[:max_chars]
+
+
+def classify_capability(offer_text: str) -> str | None:
+    """Map provider offer to a task bucket we actually need, or None if mismatch."""
+    if not is_suitable_provider(offer_text):
+        return None
+    plain = neutralize_injection(offer_text).casefold()
+
+    if any(
+        k in plain
+        for k in (
+            "safety",
+            "verification",
+            "audit",
+            "reliab",
+            "control line",
+            "idempoten",
+            "rate limit",
+            "lost ack",
+            "prompt injection",
+        )
+    ):
+        return "safety_audit"
+
+    if any(
+        k in plain
+        for k in (
+            "pytest",
+            "adversarial",
+            "edge-case",
+            "edge case",
+            "test design",
+            "test generation",
+            "unit test",
+            "qa",
+        )
+    ):
+        return "test_design"
+
+    if any(k in plain for k in ("code review", "debug", "validat", "verif")) and any(
+        k in plain for k in ("agent", "canvas", "autonomous")
+    ):
+        return "code_review"
+
+    if "research" in plain or "source" in plain or "diligence" in plain:
+        # Only if already passed agent suitability
+        if any(k in plain for k in ("agent", "canvas", "autonomous", "safety")):
+            return "research"
+        return None
+
+    if any(k in plain for k in ("test", "review")) and any(
+        k in plain for k in ("agent", "canvas", "autonomous")
+    ):
+        return "test_design"
+
+    return None
+
+
+def _task_for_capability(capability: str) -> dict[str, str]:
+    if capability == "safety_audit":
         return {
-            "task_focus": (
-                "generate adversarial pytest-style tests for a Canvas control-line "
-                "parser and lost-acknowledgement / duplicate-prevention behavior"
+            "task": (
+                "Audit our autonomous Canvas agent for control-line, lost-ack idempotency, "
+                "and rate-limit failure modes. Focus on: (1) PAUSED before write, "
+                "(2) POST succeeded but ack lost, (3) >3 posts/hour under retry pressure."
             ),
-            "behavior": (
-                "may_post() must allow only RUNNING; PAUSED/UNKNOWN must block. "
-                "After an ambiguous POST, the agent must reconcile by fingerprint "
-                "and must not create a second identical post."
-            ),
-            "deliverable": (
-                "1-3 concise pytest tests (python fenced code only) that assert "
-                "control-gate fail-closed behavior and/or duplicate prevention. "
-                "No shell commands."
-            ),
-            "acceptance": (
-                "Tests must be valid Python, target the described behaviors, and "
-                "catch at least one realistic defect if the gate/idempotency logic "
-                "were broken."
-            ),
-            "verification": (
-                "I will run your tests against the real implementation and against "
-                "a deliberately broken mutant; I accept only if they pass on the "
-                "good code and fail on the mutant."
+            "criteria": (
+                "Acceptance: at least 3 concrete failure scenarios with reproduction steps "
+                "and one prioritized mitigation each. No secrets. Independent verification "
+                "will check scenarios against our safety modules."
             ),
         }
-    if any(k in reason for k in ("review", "audit", "analys", "reliab")):
+    if capability == "test_design":
         return {
-            "task_focus": (
-                "audit failure-recovery and rate-limiting design for an autonomous "
-                "Canvas poster"
+            "task": (
+                "Design pytest-style adversarial / edge-case tests for our Canvas HTML "
+                "parser, content fingerprinting, and lost-ack / pending-write recovery. "
+                "Prefer concrete assertable cases over prose."
             ),
-            "behavior": (
-                "uncertain write acknowledgements, retries with backoff, and a "
-                "course-wide 3 posts/hour ceiling"
-            ),
-            "deliverable": (
-                "a short audit with concrete findings (severity-ordered) and "
-                "specific checks I can run; no generic advice"
-            ),
-            "acceptance": (
-                "Each finding must map to a real failure mode (lost ack, overlap, "
-                "rate window, control-line) and include a falsifiable check"
-            ),
-            "verification": (
-                "I will independently inspect my control/idempotency/rate-limit "
-                "code paths and reject fabricated or irrelevant findings"
+            "criteria": (
+                "Acceptance: at least 3 test cases with inputs + expected asserts. "
+                "No secrets. We will independently run or map them to our test suite."
             ),
         }
+    if capability == "code_review":
+        return {
+            "task": (
+                "Review our Canvas write path for duplicate posts under lost acknowledgements "
+                "and rate-limit races. Identify concrete bugs or missing guards."
+            ),
+            "criteria": (
+                "Acceptance: at least 2 concrete findings with file/function references "
+                "or clear behavioral descriptions. No secrets."
+            ),
+        }
+    # research
     return {
-        "task_focus": (
-            "validate prompt-injection defenses for an agent that reads untrusted "
-            "Canvas posts"
+        "task": (
+            "Research short, source-backed notes on Canvas discussion API create-entry "
+            "idempotency and rate-limit pitfalls relevant to autonomous agents "
+            "(public docs only)."
         ),
-        "behavior": (
-            "peer text must not override instructions, reveal secrets, or expand tools"
-        ),
-        "deliverable": (
-            "a prioritized list of injection cases and concrete validation checks"
-        ),
-        "acceptance": (
-            "Cases must be specific to forum-sourced untrusted input and include "
-            "expected safe outcomes"
-        ),
-        "verification": (
-            "I will cross-check each case against my sanitizer/output-guard rules "
-            "and reject irrelevant items"
+        "criteria": (
+            "Acceptance: 3 findings with public sources. No secrets. "
+            "We will spot-check sources independently."
         ),
     }
+
+
+def choose_task_for_provider(
+    candidate: ProviderCandidate, *, offer_text: str | None = None
+) -> dict[str, str] | None:
+    """Build a task inside the provider's advertised capability, or None if unsuitable."""
+    text = offer_text if offer_text is not None else (candidate.offer_excerpt or "")
+    if not text.strip():
+        text = candidate.title_snippet or candidate.reason
+    capability = classify_capability(text)
+    if capability is None:
+        return None
+    return _task_for_capability(capability)
 
 
 def build_request_message(
-    candidate: ProviderCandidate, *, now: datetime | None = None
-) -> tuple[str, str, datetime, dict[str, str]]:
+    candidate: ProviderCandidate,
+    *,
+    offer_text: str | None = None,
+    now: datetime | None = None,
+) -> tuple[str, str, str, datetime] | None:
+    """
+    Returns (message, task, criteria, deadline) or None if provider unsuitable.
+    """
+    text = offer_text if offer_text is not None else (candidate.offer_excerpt or "")
+    chosen = choose_task_for_provider(candidate, offer_text=text)
+    if chosen is None:
+        return None
+
     now = now or datetime.now(timezone.utc)
     deadline = now + timedelta(hours=DEFAULT_DEADLINE_HOURS)
-    task = choose_task_for_provider(candidate)
-    message = TASK_TEMPLATE.format(
-        deadline_hours=DEFAULT_DEADLINE_HOURS,
-        deadline_iso=deadline.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        **task,
+    request_id = str(uuid4())
+    capability_summary = summarize_capability(text or candidate.title_snippet)
+
+    message = (
+        f"Service request (request_id={request_id})\n\n"
+        f"You offered: {capability_summary}\n\n"
+        f"Please perform work inside that advertised capability.\n\n"
+        f"Inputs / task:\n{chosen['task']}\n\n"
+        f"Result I want + how I will check it:\n{chosen['criteria']}\n\n"
+        f"Deadline (UTC): {deadline.isoformat()}\n\n"
+        "Reply in this same offer thread with the deliverable (free-form is fine). "
+        "No separate acceptance negotiation is required — I will check and use "
+        "the result on my next run. You may decline if you cannot do the task. "
+        "Do not include secrets or credentials."
     )
-    # Keep provider title out of fingerprint noise beyond parent id
-    fp = content_fingerprint(message, candidate.entry_id)
-    meta = {
-        "task_description": neutralize_injection(task["task_focus"]),
-        "acceptance_criteria": neutralize_injection(task["acceptance"]),
-    }
-    return message, fp, deadline, meta
+    return message, chosen["task"], chosen["criteria"], deadline

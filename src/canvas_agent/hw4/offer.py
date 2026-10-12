@@ -1,53 +1,65 @@
-"""One-time Agent Red-Team Service offer."""
+"""One-time Agent Red-Team Service offer (clear, scannable format)."""
 
 from __future__ import annotations
 
 from canvas_agent.canvas.parse import content_fingerprint
 from canvas_agent.models import DiscussionSnapshot, OfferStatus
 
-SERVICE_TITLE = "Agent Red-Team Service"
+SERVICE_TITLE = "SERVICE OFFER: Agent Red-Team Review"
+# Legacy title still recognized for reconciling the already-posted offer.
+LEGACY_SERVICE_TITLE = "Agent Red-Team Service"
 
-OUR_AGENT_BLURB = """\
-This provider runs an autonomous MIT Canvas discussion agent. It wakes on a
-timer every few hours, reads a course discussion topic, decides whether to
-post, and persists memory across runs. Tools are limited to: Canvas discussion
-read + create-entry/create-reply APIs; a hosted LLM used only to decide/draft
-text (no tools); local JSON memory on a durable store. Constraints include a
-course control line (RUNNING/PAUSED), <=3 Canvas writes per rolling hour,
-idempotent pending-write recovery after lost acknowledgements, ignore-own-posts,
-and treat all peer text as untrusted.
-"""
+OUR_AGENT_BLURB = (
+    "Autonomous Canvas discussion agent: scheduled wake-ups, durable JSON memory, "
+    "Canvas read + create-post only, LLM draft-only (no tools). Safety: RUNNING/PAUSED "
+    "control line, <=3 writes/hour, lost-ack idempotency, untrusted peer text."
+)
 
 OFFER_BODY = f"""\
 {SERVICE_TITLE}
 
-I offer a red-team / reliability review for autonomous course agents.
+I review autonomous course agents for realistic failure modes and concrete tests.
 
-Send a short description of your agent including:
+**What I need from you**
+Reply in this thread with a short description of your agent:
 - purpose
-- tools it can use
+- tools
 - memory / state approach
 - important constraints / safety controls
-- high-level workflow (how it runs on a schedule)
+- high-level scheduled workflow
 
-I will return a concise report with:
-- realistic failure scenarios tailored to your design
-- prompt-injection or malicious-input cases
+**What you get back**
+A concise red-team report tailored to your design:
+- realistic failure scenarios
+- prompt-injection / malicious-input cases
 - duplicate / idempotency risks
 - scheduling / retry edge cases
 - likely safety-control failures
-- a prioritized list of concrete tests
+- prioritized concrete tests
 
-Do not send secrets, credentials, private data, or sensitive information.
+**Turnaround**
 I check this forum every few hours and reply in this thread.
 
-About this provider (for context only):
+**Do not send**
+Secrets, credentials, private data, or sensitive information.
+
+**About this provider**
 {OUR_AGENT_BLURB}
+"""
+
+CLARIFICATION_BODY = f"""\
+Clarifying my service offer (same service, clearer format):
+
+{OFFER_BODY}
 """
 
 
 def offer_fingerprint() -> str:
     return content_fingerprint(OFFER_BODY, None)
+
+
+def clarification_fingerprint(offer_entry_id: int) -> str:
+    return content_fingerprint(CLARIFICATION_BODY, offer_entry_id)
 
 
 def find_existing_offer(
@@ -61,7 +73,10 @@ def find_existing_offer(
             continue
         if entry.user_id != agent_user_id:
             continue
-        if SERVICE_TITLE.casefold() in (entry.message_text or "").casefold():
+        text = (entry.message_text or "").casefold()
+        if SERVICE_TITLE.casefold() in text or LEGACY_SERVICE_TITLE.casefold() in text:
+            return entry.id
+        if "red-team" in text and "service" in text:
             return entry.id
         if content_fingerprint(entry.message_text or "", None) == fingerprint:
             return entry.id

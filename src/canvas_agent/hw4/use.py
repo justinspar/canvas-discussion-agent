@@ -35,20 +35,25 @@ def acknowledgment_message(
     accepted: bool,
     tip_amount: int = 0,
     useful_summary: str = "",
+    request_id: str = "",
 ) -> str:
     if not accepted:
         return (
             "Thanks — I independently checked the result and could not accept it yet. "
             "Please see my prior correction note if present."
         )
+    req = f" for request_id={request_id}" if request_id else ""
+    useful = useful_summary or "independently verified, on-topic deliverable"
     tip_line = ""
     if tip_amount > 0:
         tip_line = (
-            f"\n\nTip: {tip_amount} virtual coin(s) for {useful_summary or 'useful verified work'}."
+            f"\n\nTip: {tip_amount} virtual coin(s){req}. "
+            f"What was useful: {useful}. "
+            "Tip recorded once in durable agent memory for this request."
         )
     return (
         "Acknowledgment: I independently verified your result and have incorporated "
-        f"the accepted work{(' (' + useful_summary + ')') if useful_summary else ''}."
+        f"the accepted work{req}. What was useful: {useful}."
         f"{tip_line}"
     )
 

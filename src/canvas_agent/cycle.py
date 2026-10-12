@@ -226,8 +226,12 @@ class CycleOrchestrator:
         assert decision.kind is not None and decision.message is not None
 
         if decision.kind is WriteKind.REPLY:
-            # HW4 replies may target our own offer thread when serving requests.
-            if planned is not None and planned.meta.get("type") == "serve":
+            # HW4 may reply under our own offer when serving or clarifying the offer.
+            allow_self_parent = planned is not None and planned.meta.get("type") in {
+                "serve",
+                "offer_clarification",
+            }
+            if allow_self_parent:
                 if decision.parent_id != state.hw4.offer_entry_id:
                     return CycleResult(
                         abstained=True,

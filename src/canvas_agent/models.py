@@ -78,6 +78,7 @@ class ProviderCandidate(BaseModel):
     score: float = 0.0
     reason: str = ""
     title_snippet: str = ""
+    offer_excerpt: str = ""
 
 
 class IncomingRequestRecord(BaseModel):
@@ -120,6 +121,7 @@ class Hw4State(BaseModel):
     offer_fingerprint: str | None = None
     offer_status: OfferStatus = OfferStatus.NEEDED
     offer_verified: bool = False
+    offer_clarification_id: int | None = None
 
     incoming_requests: list[IncomingRequestRecord] = Field(default_factory=list)
 

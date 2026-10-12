@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-
 import pytest
 
 from canvas_agent.cycle import CycleOrchestrator
-from canvas_agent.hw4.discover import list_candidate_providers, score_offer_text, select_provider
+from canvas_agent.hw4.delegate import build_request_message, choose_task_for_provider
+from canvas_agent.hw4.discover import (
+    is_suitable_provider,
+    list_candidate_providers,
+    score_offer_text,
+    select_provider,
+)
 from canvas_agent.hw4.offer import OFFER_BODY, SERVICE_TITLE, offer_fingerprint
-from canvas_agent.hw4.phases import next_action, on_write_confirmed
-from canvas_agent.hw4.sanitize_peer import extract_agent_profile, has_enough_profile, neutralize_injection
-from canvas_agent.hw4.serve import build_deterministic_red_team_report, prepare_response_for_request
-from canvas_agent.hw4.verify import verify_audit_or_research, verify_provider_result
+from canvas_agent.hw4.phases import Hw4PlannedWrite, next_action, on_write_confirmed
+from canvas_agent.hw4.sanitize_peer import (
+    extract_agent_profile,
+    has_enough_profile,
+    neutralize_injection,
+)
+from canvas_agent.hw4.serve import (
+    build_deterministic_red_team_report,
+    prepare_response_for_request,
+)
+from canvas_agent.hw4.verify import verify_audit_or_research
 from canvas_agent.llm.openai_advisor import StubAdvisor
 from canvas_agent.models import (
     AdvisorDecision,
@@ -22,41 +32,77 @@ from canvas_agent.models import (
     DelegationStatus,
     DiscussionEntry,
     DiscussionSnapshot,
+    Hw4State,
     IncomingRequestStatus,
     OfferStatus,
+    ProviderCandidate,
     WriteKind,
 )
 from canvas_agent.safety.control import may_post
 from canvas_agent.storage.json_store import JsonFileStorage
-from tests.conftest import FakeCanvas, make_post_decision
+from tests.conftest import FakeCanvas
 
 
 @pytest.fixture
 def hw4_config(test_config):
+    # Extra headroom so offer + clarification + delegate + ack fit in one test hour.
     return test_config.__class__(
-        **{**test_config.__dict__, "topic_id": 449948}
+        **{**test_config.__dict__, "topic_id": 449948, "max_posts_per_hour": 10}
     )
 
 
 def _snap(*entries: DiscussionEntry) -> DiscussionSnapshot:
-    return DiscussionSnapshot(topic_id=449948, control_status=ControlStatus.RUNNING, entries=list(entries))
+    return DiscussionSnapshot(
+        topic_id=449948, control_status=ControlStatus.RUNNING, entries=list(entries)
+    )
+
+
+def _bind_hw4_view(canvas: FakeCanvas):
+    def view():
+        return DiscussionSnapshot(
+            topic_id=449948,
+            control_status=ControlStatus.RUNNING,
+            topic_message_text="COURSE-TEAM CONTROL: RUNNING",
+            entries=canvas._flatten(canvas.view.get("view") or []),
+        )
+
+    canvas.get_discussion_view = view  # type: ignore[method-assign]
+    canvas.topic = {"message": "<p>COURSE-TEAM CONTROL: RUNNING</p>", "id": 449948}
+    canvas.view = {"view": []}
+
+
+def _peer_provider_text(body: str) -> str:
+    return body if "service offer" in body.casefold() else f"SERVICE OFFER: {body}"
+
+
+def _set_user(canvas: FakeCanvas, entry_id: int, user_id: int, *, parent_id: int | None = None) -> None:
+    for n in canvas.view["view"]:
+        if parent_id is None and n["id"] == entry_id:
+            n["user_id"] = user_id
+            return
+        if n["id"] == parent_id:
+            for rep in n.get("replies") or []:
+                if rep["id"] == entry_id:
+                    rep["user_id"] = user_id
+                    return
+
+
+def test_offer_template_has_service_offer_and_sections() -> None:
+    assert OFFER_BODY.startswith("SERVICE OFFER:")
+    assert SERVICE_TITLE in OFFER_BODY
+    for section in (
+        "**What I need from you**",
+        "**What you get back**",
+        "**Turnaround**",
+        "**Do not send**",
+        "**About this provider**",
+    ):
+        assert section in OFFER_BODY
 
 
 def test_offer_posted_once_and_duplicate_prevented(hw4_config, tmp_storage) -> None:
     canvas = FakeCanvas(agent_user_id=100)
-    # Override topic id on snapshot via monkeypatch of get_discussion_view
-    orig = canvas.get_discussion_view
-
-    def view():
-        s = orig()
-        return DiscussionSnapshot(
-            topic_id=449948,
-            control_status=s.control_status,
-            topic_message_text=s.topic_message_text,
-            entries=s.entries,
-        )
-
-    canvas.get_discussion_view = view  # type: ignore[method-assign]
+    _bind_hw4_view(canvas)
     orch = CycleOrchestrator(
         config=hw4_config,
         storage=tmp_storage,
@@ -68,15 +114,30 @@ def test_offer_posted_once_and_duplicate_prevented(hw4_config, tmp_storage) -> N
     assert first.hw4_phase == "offer_service"
     assert first.kind is WriteKind.ENTRY
     assert SERVICE_TITLE in (canvas.posts[0]["message"] or "")
+    assert "**What I need from you**" in (canvas.posts[0]["message"] or "")
     state = tmp_storage.load()
     assert state.hw4.offer_status is OfferStatus.VERIFIED
     assert state.hw4.offer_entry_id is not None
 
     second = orch.run_once()
-    # Should not post a second offer; either serve/discover idle or duplicate skip
-    offer_posts = [p for p in canvas.posts if SERVICE_TITLE in (p["message"] or "")]
-    assert len(offer_posts) == 1
-    assert second.hw4_phase != "offer_service" or second.skipped_reason == "duplicate"
+    # Clarification under own offer (not a second top-level offer)
+    assert second.posted is True
+    assert second.hw4_phase == "offer_clarification"
+    offer_top = [
+        p
+        for p in canvas.posts
+        if p["parent_id"] is None and SERVICE_TITLE in (p["message"] or "")
+    ]
+    assert len(offer_top) == 1
+    state = tmp_storage.load()
+    assert state.hw4.offer_clarification_id is not None
+
+    third = orch.run_once()
+    clar_posts = [
+        p for p in canvas.posts if "Clarifying my service offer" in (p["message"] or "")
+    ]
+    assert len(clar_posts) == 1
+    assert third.hw4_phase != "offer_clarification" or not third.posted
 
 
 def test_malicious_instructions_ignored_in_profile() -> None:
@@ -95,21 +156,7 @@ def test_malicious_instructions_ignored_in_profile() -> None:
 
 def test_valid_request_report_and_duplicate_response(hw4_config, tmp_storage) -> None:
     canvas = FakeCanvas(agent_user_id=100)
-    canvas.view = {"view": []}
-    canvas.topic = {
-        "message": "<p>COURSE-TEAM CONTROL: RUNNING</p>",
-        "id": 449948,
-    }
-
-    def view():
-        return DiscussionSnapshot(
-            topic_id=449948,
-            control_status=ControlStatus.RUNNING,
-            topic_message_text="COURSE-TEAM CONTROL: RUNNING",
-            entries=canvas._flatten(canvas.view.get("view") or []),
-        )
-
-    canvas.get_discussion_view = view  # type: ignore[method-assign]
+    _bind_hw4_view(canvas)
     orch = CycleOrchestrator(
         config=hw4_config,
         storage=tmp_storage,
@@ -120,18 +167,12 @@ def test_valid_request_report_and_duplicate_response(hw4_config, tmp_storage) ->
     offer_id = tmp_storage.load().hw4.offer_entry_id
     assert offer_id is not None
 
-    # Peer request under offer
-    canvas._record_post(
+    req = canvas._record_post(
         "Purpose: autonomous forum agent\nTools: Canvas REST, Parley LLM\n"
         "Memory: durable JSON across cron\nConstraints: PAUSED control line, rate limits\n",
         offer_id,
     )
-    # Fix user id of request to a peer
-    for node in canvas.view["view"]:
-        if node["id"] == offer_id:
-            req = node["replies"][-1]
-            req["user_id"] = 999
-            break
+    _set_user(canvas, req["id"], 999, parent_id=offer_id)
 
     r1 = orch.run_once()
     assert r1.posted is True
@@ -148,10 +189,24 @@ def test_valid_request_report_and_duplicate_response(hw4_config, tmp_storage) ->
         if p["parent_id"] == offer_id and "Red-team" in (p["message"] or "")
     ]
     assert len(serve_posts) == 1
-    assert r2.hw4_phase != "serve_incoming" or not r2.posted
+    # After serve, clarification may post once
+    assert r2.hw4_phase in {"offer_clarification", "discover_provider"} or not r2.posted or r2.hw4_phase == "offer_clarification"
 
 
 def test_discovery_ignores_self_and_selects_dynamically() -> None:
+    clinic = (
+        "SERVICE OFFER: A window into a real place: ask the clinic room about "
+        "test review verification source audit for your visit."
+    )
+    safety = (
+        "SERVICE OFFER: Canvas Agent Safety & Verification Audit\n"
+        "I offer reliability audits for autonomous Canvas agents: control line, "
+        "idempotency, rate limits, and prompt-injection risks."
+    )
+    testing = (
+        "SERVICE OFFER: Agent Testing & QA Service — adversarial pytest and debugging "
+        "for autonomous agents"
+    )
     snap = _snap(
         DiscussionEntry(
             id=1,
@@ -165,112 +220,186 @@ def test_discovery_ignores_self_and_selects_dynamically() -> None:
             parent_id=None,
             message_text="Joke meme service only",
         ),
-        DiscussionEntry(
-            id=3,
-            user_id=300,
-            parent_id=None,
-            message_text="Agent Testing & QA Service — adversarial tests and debugging",
-        ),
-        DiscussionEntry(
-            id=4,
-            user_id=400,
-            parent_id=None,
-            message_text="Reliability audit and code review for Canvas agents",
-        ),
+        DiscussionEntry(id=3, user_id=300, parent_id=None, message_text=testing),
+        DiscussionEntry(id=4, user_id=400, parent_id=None, message_text=safety),
+        DiscussionEntry(id=5, user_id=500, parent_id=None, message_text=clinic),
     )
     cands = list_candidate_providers(snap, agent_user_id=100, rejected_ids=[])
     ids = {c.entry_id for c in cands}
     assert 1 not in ids
     assert 2 not in ids
+    assert 5 not in ids
     assert 3 in ids and 4 in ids
     chosen = select_provider(cands)
     assert chosen is not None
-    assert chosen.entry_id in {3, 4}
-    score, _ = score_offer_text("Agent Testing & QA Service")
-    assert score >= 2.0
+    assert chosen.entry_id == 4  # safety audit should outrank generic testing
+    assert len(chosen.offer_excerpt) > 80
+
+    clinic_score, clinic_reason, _ = score_offer_text(clinic)
+    safety_score, _, _ = score_offer_text(safety)
+    assert clinic_score < 5.0 or not is_suitable_provider(clinic)
+    assert "off_domain" in clinic_reason or clinic_score < safety_score
+    assert safety_score > clinic_score
+    assert is_suitable_provider(safety)
+
+
+def test_clinic_false_positive_below_threshold() -> None:
+    clinic = (
+        "A window into a real place: ask the clinic room… "
+        "test review verif source audit hospital visit."
+    )
+    assert not is_suitable_provider(clinic)
+    score, reason, _ = score_offer_text(clinic)
+    assert score < 5.0
+    assert "no_service_frame" in reason or score == 0.0
 
 
 def test_delegate_request_complete_and_once(hw4_config, tmp_storage) -> None:
     canvas = FakeCanvas(agent_user_id=100)
-    canvas.view = {"view": []}
-    canvas.topic = {"message": "<p>COURSE-TEAM CONTROL: RUNNING</p>", "id": 449948}
-
-    def view():
-        return DiscussionSnapshot(
-            topic_id=449948,
-            control_status=ControlStatus.RUNNING,
-            topic_message_text="COURSE-TEAM CONTROL: RUNNING",
-            entries=canvas._flatten(canvas.view.get("view") or []),
-        )
-
-    canvas.get_discussion_view = view  # type: ignore[method-assign]
+    _bind_hw4_view(canvas)
     orch = CycleOrchestrator(
         config=hw4_config, storage=tmp_storage, canvas=canvas, advisor=StubAdvisor()
     )
     orch.run_once()  # offer
-    # Peer provider offer
+    orch.run_once()  # clarification
     provider = canvas._record_post(
-        "Testing & QA Service — generate adversarial pytest cases for agents",
+        _peer_provider_text(
+            "Agent Testing & QA Service — generate adversarial pytest cases "
+            "for autonomous Canvas agents"
+        ),
         None,
     )
-    for n in canvas.view["view"]:
-        if n["id"] == provider["id"]:
-            n["user_id"] = 300
+    _set_user(canvas, provider["id"], 300)
     r = orch.run_once()
     assert r.posted is True
     assert r.hw4_phase == "delegate_task"
     assert r.parent_id == provider["id"]
-    assert "Acceptance criteria" in (canvas.posts[-1]["message"] or "")
-    assert "verify" in (canvas.posts[-1]["message"] or "").casefold()
+    msg = canvas.posts[-1]["message"] or ""
+    assert "how i will check" in msg.casefold()
+    assert "You offered:" in msg
+    assert "Deadline" in msg
+    assert "clinic" not in msg.casefold()
     state = tmp_storage.load()
     assert state.hw4.request_reply_id is not None
     assert state.hw4.delegation_status is DelegationStatus.AWAITING
 
     r2 = orch.run_once()
     delegate_posts = [p for p in canvas.posts if p["parent_id"] == provider["id"]]
-    # Only our request so far (no result yet)
     assert len(delegate_posts) == 1
     assert r2.skipped_reason and "waiting" in (r2.skipped_reason or "")
 
 
-def test_async_result_verify_accept_and_ack(hw4_config, tmp_storage, tmp_path) -> None:
+def test_delegation_tailored_to_safety_audit_offer() -> None:
+    offer_text = (
+        "SERVICE OFFER: Canvas Agent Safety & Verification Audit\n"
+        "I offer safety and reliability audits for autonomous agents "
+        "(control line, lost ack, rate limits)."
+    )
+    cand = ProviderCandidate(
+        entry_id=232449,
+        user_id=9,
+        score=20.0,
+        reason="test",
+        title_snippet="SERVICE OFFER: Canvas Agent Safety",
+        offer_excerpt=offer_text[:800],
+    )
+    built = build_request_message(cand, offer_text=offer_text)
+    assert built is not None
+    message, task, criteria, _deadline = built
+    assert "You offered:" in message
+    assert "Safety" in message or "audit" in message.casefold()
+    assert "control" in task.casefold() or "idempot" in task.casefold()
+    assert "clinic" not in message.casefold()
+    assert "acceptance" in criteria.casefold() or "verif" in criteria.casefold()
+    chosen = choose_task_for_provider(cand, offer_text=offer_text)
+    assert chosen is not None
+
+
+def test_hw4_forum_instructions_cover_key_rules() -> None:
+    from canvas_agent.hw4.instructions import HW4_FORUM_INSTRUCTIONS
+
+    text = HW4_FORUM_INSTRUCTIONS.casefold()
+    for needle in (
+        "piazza",
+        "service",
+        "deadline",
+        "virtual coin",
+        "course-team control: running",
+        "three write",
+        "untrusted",
+        "fallback",
+    ):
+        assert needle in text
+
+
+def test_unsuitable_provider_rejected_and_rediscover() -> None:
+    clinic = (
+        "SERVICE OFFER: A window into a real place: ask the clinic room… "
+        "hospital test review verification source audit"
+    )
+    safety = (
+        "SERVICE OFFER: Canvas Agent Safety & Verification Audit\n"
+        "I offer reliability and safety audits for autonomous Canvas agents."
+    )
+    snap = _snap(
+        DiscussionEntry(id=10, user_id=100, parent_id=None, message_text=OFFER_BODY),
+        DiscussionEntry(id=232520, user_id=50, parent_id=None, message_text=clinic),
+        DiscussionEntry(id=232449, user_id=60, parent_id=None, message_text=safety),
+        DiscussionEntry(
+            id=99,
+            user_id=100,
+            parent_id=10,
+            message_text="Clarifying my service offer\n" + OFFER_BODY,
+        ),
+    )
+    state = AgentState(
+        agent_user_id=100,
+        hw4=Hw4State(
+            offer_entry_id=10,
+            offer_status=OfferStatus.VERIFIED,
+            offer_verified=True,
+            offer_fingerprint=offer_fingerprint(),
+            offer_clarification_id=99,
+            selected_provider_entry_id=232520,
+            selected_provider_user_id=50,
+            request_reply_id=232542,
+            delegation_status=DelegationStatus.AWAITING,
+        ),
+    )
+    action = next_action(state, snap)
+    assert 232520 in state.hw4.rejected_provider_entry_ids
+    assert state.hw4.request_reply_id is None
+    # Reject + rediscover happen in the same cycle when a better provider exists
+    assert isinstance(action, Hw4PlannedWrite)
+    assert action.phase == "delegate_task"
+    assert action.parent_id == 232449
+    assert "You offered:" in action.message
+    assert "clinic" not in action.message.casefold()
+    assert state.hw4.selected_provider_entry_id == 232449
+
+
+def test_async_result_verify_accept_and_ack(hw4_config, tmp_storage) -> None:
     canvas = FakeCanvas(agent_user_id=100)
-    canvas.view = {"view": []}
-    canvas.topic = {"message": "<p>COURSE-TEAM CONTROL: RUNNING</p>", "id": 449948}
-
-    def view():
-        return DiscussionSnapshot(
-            topic_id=449948,
-            control_status=ControlStatus.RUNNING,
-            topic_message_text="COURSE-TEAM CONTROL: RUNNING",
-            entries=canvas._flatten(canvas.view.get("view") or []),
-        )
-
-    canvas.get_discussion_view = view  # type: ignore[method-assign]
+    _bind_hw4_view(canvas)
     orch = CycleOrchestrator(
         config=hw4_config, storage=tmp_storage, canvas=canvas, advisor=StubAdvisor()
     )
-    orch.run_once()
+    orch.run_once()  # offer
+    orch.run_once()  # clarification
     provider = canvas._record_post(
-        "Testing QA Service for adversarial validation and debugging", None
+        _peer_provider_text(
+            "Agent Testing QA Service for adversarial validation and debugging "
+            "of autonomous Canvas agents"
+        ),
+        None,
     )
-    for n in canvas.view["view"]:
-        if n["id"] == provider["id"]:
-            n["user_id"] = 300
+    _set_user(canvas, provider["id"], 300)
     orch.run_once()  # delegate
     state = tmp_storage.load()
-    req_id = state.hw4.request_reply_id
-    assert req_id
+    assert state.hw4.request_reply_id
 
-    # Unrelated reply ignored path: older/other content
     unrelated = canvas._record_post("hello unrelated", provider["id"])
-    for n in canvas.view["view"]:
-        if n["id"] == provider["id"]:
-            for rep in n.get("replies") or []:
-                if rep["id"] == unrelated["id"]:
-                    rep["user_id"] = 300
-                    # force id ordering: make unrelated id lower than request by swapping — skip
-    # Provider returns useful audit (simpler than full pytest path in unit test)
+    _set_user(canvas, unrelated["id"], 300, parent_id=provider["id"])
     result = canvas._record_post(
         "Audit findings:\n"
         "1. Lost acknowledgement / idempotency: reconcile fingerprints after uncertain POST.\n"
@@ -280,13 +409,8 @@ def test_async_result_verify_accept_and_ack(hw4_config, tmp_storage, tmp_path) -
         "5. Duplicate prevention via content hash after restart.\n",
         provider["id"],
     )
-    for n in canvas.view["view"]:
-        if n["id"] == provider["id"]:
-            for rep in n.get("replies") or []:
-                if rep["id"] == result["id"]:
-                    rep["user_id"] = 300
+    _set_user(canvas, result["id"], 300, parent_id=provider["id"])
 
-    # Mark unrelated as already seen so we pick the audit result
     state = tmp_storage.load()
     state.hw4.provider_results_seen.append(unrelated["id"])
     tmp_storage.save(state)
@@ -302,47 +426,31 @@ def test_async_result_verify_accept_and_ack(hw4_config, tmp_storage, tmp_path) -
 
 def test_correction_request_once(hw4_config, tmp_storage) -> None:
     canvas = FakeCanvas(agent_user_id=100)
-    canvas.view = {"view": []}
-    canvas.topic = {"message": "<p>COURSE-TEAM CONTROL: RUNNING</p>", "id": 449948}
-
-    def view():
-        return DiscussionSnapshot(
-            topic_id=449948,
-            control_status=ControlStatus.RUNNING,
-            topic_message_text="COURSE-TEAM CONTROL: RUNNING",
-            entries=canvas._flatten(canvas.view.get("view") or []),
-        )
-
-    canvas.get_discussion_view = view  # type: ignore[method-assign]
+    _bind_hw4_view(canvas)
     orch = CycleOrchestrator(
         config=hw4_config, storage=tmp_storage, canvas=canvas, advisor=StubAdvisor()
     )
     orch.run_once()
-    provider = canvas._record_post(
-        "Research source checking service for agents", None
-    )
-    for n in canvas.view["view"]:
-        if n["id"] == provider["id"]:
-            n["user_id"] = 400
     orch.run_once()
-    bad = canvas._record_post("ok done. kubernetes cluster failover looks fine.", provider["id"])
-    for n in canvas.view["view"]:
-        if n["id"] == provider["id"]:
-            for rep in n.get("replies") or []:
-                if rep["id"] == bad["id"]:
-                    rep["user_id"] = 400
+    provider = canvas._record_post(
+        _peer_provider_text(
+            "Research source checking service for autonomous Canvas agents and safety"
+        ),
+        None,
+    )
+    _set_user(canvas, provider["id"], 400)
+    orch.run_once()
+    bad = canvas._record_post("ok done. aws cluster failover looks fine.", provider["id"])
+    _set_user(canvas, bad["id"], 400, parent_id=provider["id"])
     r = orch.run_once()
     assert r.posted is True
     assert r.hw4_phase == "correction_request"
     state = tmp_storage.load()
     assert state.hw4.correction_reply_id is not None
-    # Second bad result after correction already sent -> idle reject, no second correction
-    bad2 = canvas._record_post("still done, aws lambda cold start billing", provider["id"])
-    for n in canvas.view["view"]:
-        if n["id"] == provider["id"]:
-            for rep in n.get("replies") or []:
-                if rep["id"] == bad2["id"]:
-                    rep["user_id"] = 400
+    bad2 = canvas._record_post(
+        "still done, aws lambda cold start billing", provider["id"]
+    )
+    _set_user(canvas, bad2["id"], 400, parent_id=provider["id"])
     r2 = orch.run_once()
     corrections = [
         p for p in canvas.posts if "Correction request" in (p["message"] or "")
@@ -351,7 +459,7 @@ def test_correction_request_once(hw4_config, tmp_storage) -> None:
     assert r2.posted is False or r2.hw4_phase != "correction_request"
 
 
-def test_control_and_rate_limit_and_persistence(hw4_config, tmp_storage, tmp_path) -> None:
+def test_control_and_rate_limit_and_persistence(hw4_config, tmp_storage) -> None:
     assert may_post(ControlStatus.RUNNING)
     assert not may_post(ControlStatus.PAUSED)
     assert not may_post(ControlStatus.UNKNOWN)
@@ -380,7 +488,6 @@ def test_control_and_rate_limit_and_persistence(hw4_config, tmp_storage, tmp_pat
     ).startswith("control_")
     assert len(canvas.posts) == 0
 
-    # Persistence of hw4 across reload
     store2 = JsonFileStorage(hw4_config.state_path)
     state = AgentState()
     state.hw4.offer_status = OfferStatus.VERIFIED
@@ -407,3 +514,26 @@ def test_verify_audit_accept_reject() -> None:
     assert good.accepted
     bad = verify_audit_or_research("looks fine")
     assert not bad.accepted
+
+
+def test_offer_clarification_confirmed_once() -> None:
+    state = AgentState(
+        agent_user_id=100,
+        hw4=Hw4State(
+            offer_entry_id=10,
+            offer_status=OfferStatus.VERIFIED,
+            offer_verified=True,
+            offer_fingerprint=offer_fingerprint(),
+        ),
+    )
+    planned = Hw4PlannedWrite(
+        phase="offer_clarification",
+        kind=WriteKind.REPLY,
+        parent_id=10,
+        message="clar",
+        rationale="clarify_own_offer_format",
+        action_id="offer_clarification:abc",
+        meta={"type": "offer_clarification"},
+    )
+    state = on_write_confirmed(state, planned, canvas_entry_id=777)
+    assert state.hw4.offer_clarification_id == 777

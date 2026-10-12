@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from canvas_agent.canvas.parse import content_fingerprint
 from canvas_agent.hw4 import delegate, discover, offer, serve, use, verify
 from canvas_agent.hw4.llm_helpers import draft_red_team_report
 from canvas_agent.hw4.sanitize_peer import (
@@ -68,6 +69,53 @@ def _reconcile_offer(state: AgentState, snapshot: DiscussionSnapshot) -> None:
         hw4.offer_verified = True
 
 
+def _reject_provider(hw4: Any, *, reason: str) -> None:
+    if hw4.selected_provider_entry_id is not None:
+        if hw4.selected_provider_entry_id not in hw4.rejected_provider_entry_ids:
+            hw4.rejected_provider_entry_ids.append(hw4.selected_provider_entry_id)
+    hw4.selected_provider_entry_id = None
+    hw4.selected_provider_user_id = None
+    hw4.request_reply_id = None
+    hw4.request_hash = None
+    hw4.delegated_request_id = None
+    hw4.task_description = None
+    hw4.acceptance_criteria = None
+    hw4.request_deadline = None
+    hw4.correction_reply_id = None
+    hw4.correction_request_id = None
+    hw4.delegation_status = DelegationStatus.PROVIDER_DECLINED
+    hw4.provider_rediscoveries += 1
+    logger.info("Rejected unsuitable provider: %s", reason)
+
+
+def _recover_unsuitable_selection(
+    hw4: Any, snapshot: DiscussionSnapshot
+) -> bool:
+    """
+    If the currently selected provider fails suitability, reject and clear
+    awaiting request fields (when no accepted work yet). Returns True if rejected.
+    """
+    if hw4.selected_provider_entry_id is None:
+        return False
+    if hw4.accepted_work is not None or hw4.acknowledgment_id is not None:
+        return False
+    if hw4.delegation_status is DelegationStatus.ACCEPTED:
+        return False
+
+    offer_text = discover.provider_offer_text(
+        snapshot, hw4.selected_provider_entry_id
+    )
+    if not offer_text:
+        # Keep waiting if snapshot temporarily lacks the post; only reject when
+        # we can read an unsuitable offer.
+        return False
+    if discover.is_suitable_provider(offer_text):
+        return False
+
+    _reject_provider(hw4, reason="unsuitable_offer")
+    return True
+
+
 def next_action(
     state: AgentState,
     snapshot: DiscussionSnapshot,
@@ -123,6 +171,33 @@ def next_action(
             },
         )
 
+    # 3) One-time clarification under our own offer (posts cannot be edited)
+    if hw4.offer_clarification_id is None and hw4.offer_entry_id is not None:
+        clar_fp = offer.clarification_fingerprint(hw4.offer_entry_id)
+        # Reconcile if already posted in a prior cycle / lost ack
+        for entry in snapshot.entries:
+            if (
+                entry.parent_id == hw4.offer_entry_id
+                and state.agent_user_id is not None
+                and entry.user_id == state.agent_user_id
+                and "Clarifying my service offer" in (entry.message_text or "")
+            ):
+                hw4.offer_clarification_id = entry.id
+                break
+        if hw4.offer_clarification_id is None:
+            return Hw4PlannedWrite(
+                phase="offer_clarification",
+                kind=WriteKind.REPLY,
+                parent_id=hw4.offer_entry_id,
+                message=offer.CLARIFICATION_BODY,
+                rationale="clarify_own_offer_format",
+                action_id=f"offer_clarification:{clar_fp[:16]}",
+                meta={"type": "offer_clarification", "fingerprint": clar_fp},
+            )
+
+    # Recover from a previously selected unsuitable provider (e.g. clinic false positive)
+    _recover_unsuitable_selection(hw4, snapshot)
+
     # Need rediscovery after decline/expiry/reject
     needs_new_provider = hw4.delegation_status in {
         DelegationStatus.NONE,
@@ -169,14 +244,27 @@ def next_action(
                 ),
                 None,
             )
+            offer_text = discover.provider_offer_text(
+                snapshot, hw4.selected_provider_entry_id
+            )
             if cand is None:
                 cand = ProviderCandidate(
                     entry_id=hw4.selected_provider_entry_id,
                     user_id=hw4.selected_provider_user_id,
                     score=1.0,
                     reason="selected",
+                    offer_excerpt=offer_text[:800],
+                    title_snippet=(offer_text.strip().splitlines() or [""])[0][:160],
                 )
-            message, fp, deadline, meta = delegate.build_request_message(cand)
+            built = delegate.build_request_message(cand, offer_text=offer_text)
+            if built is None:
+                _reject_provider(hw4, reason="capability_mismatch")
+                return Hw4Idle(
+                    phase="discover_provider",
+                    rationale="provider_capability_mismatch",
+                )
+            message, task, criteria, deadline = built
+            fp = content_fingerprint(message, cand.entry_id)
             return Hw4PlannedWrite(
                 phase="delegate_task",
                 kind=WriteKind.REPLY,
@@ -188,14 +276,21 @@ def next_action(
                     "type": "delegate",
                     "request_hash": fp,
                     "deadline": deadline,
-                    "task_description": meta["task_description"],
-                    "acceptance_criteria": meta["acceptance_criteria"],
+                    "task_description": task,
+                    "acceptance_criteria": criteria,
                     "provider_entry_id": cand.entry_id,
                 },
             )
 
     # Await / verify / correct / ack
     if hw4.request_reply_id is not None and hw4.acknowledgment_id is None:
+        # Mid-await suitability check (recover bad live delegation)
+        if _recover_unsuitable_selection(hw4, snapshot):
+            return Hw4Idle(
+                phase="await_result",
+                rationale="rejected_unsuitable_provider",
+            )
+
         provider_id = hw4.selected_provider_entry_id
         results = [
             e
@@ -271,6 +366,7 @@ def next_action(
                 accepted=True,
                 tip_amount=tip_amt,
                 useful_summary=outcome.method,
+                request_id=hw4.delegated_request_id or "",
             )
             return Hw4PlannedWrite(
                 phase="use_and_ack",
@@ -330,6 +426,8 @@ def on_write_confirmed(
         hw4.offer_status = OfferStatus.VERIFIED
         hw4.offer_verified = True
         hw4.offer_fingerprint = offer.offer_fingerprint()
+    elif kind == "offer_clarification":
+        hw4.offer_clarification_id = canvas_entry_id
     elif kind == "serve":
         req_id = int(meta["request_entry_id"])
         rec = next(

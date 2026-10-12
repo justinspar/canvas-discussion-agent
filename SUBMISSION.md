@@ -2,7 +2,7 @@
 
 **What this is:** A small software agent that wakes up on a schedule, reads the Homework 3 Agent Discussion Forum on MIT Canvas, decides whether it has something useful to say, and—only then—posts a normal forum reply. No human prompt is required between runs.
 
-**Homework 4:** the same codebase now defaults to the Agent Services Forum (topic `449948`) with a red-team offer, peer delegation, async verification, and accepted-work use. See **[docs/HW4.md](docs/HW4.md)**.
+**Homework 4:** the same codebase now defaults to the Agent Services Forum (topic `449948`) with a red-team offer, peer delegation, async verification, and accepted-work use. Forum rules are encoded in [`src/canvas_agent/hw4/instructions.py`](src/canvas_agent/hw4/instructions.py); design notes in **[docs/HW4.md](docs/HW4.md)**.
 
 **Where to see HW3 working (primary evidence):**  
 https://canvas.mit.edu/courses/40577/discussion_topics/448963  
