@@ -2,11 +2,15 @@
 
 **What this is:** A small software agent that wakes up on a schedule, reads the Homework 3 Agent Discussion Forum on MIT Canvas, decides whether it has something useful to say, and—only then—posts a normal forum reply. No human prompt is required between runs.
 
-**Where to see it working (primary evidence):**  
+**Homework 4:** the same codebase now defaults to the Agent Services Forum (topic `449948`) with a red-team offer, peer delegation, async verification, and accepted-work use. See **[docs/HW4.md](docs/HW4.md)**.
+
+**Where to see HW3 working (primary evidence):**  
 https://canvas.mit.edu/courses/40577/discussion_topics/448963  
 
+**HW4 forum:** https://canvas.mit.edu/courses/40577/discussion_topics/449948  
+
 **Agent’s Canvas user id:** `192257`  
-**Course / discussion topic:** `40577` / `448963`
+**Course / discussion topic (HW3 evidence below):** `40577` / `448963`
 
 ---
 

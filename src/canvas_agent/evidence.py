@@ -35,5 +35,7 @@ def write_cycle_evidence(path: Path, result: CycleResult) -> None:
         "contribution_entry_id": (
             result.contribution.canvas_entry_id if result.contribution else None
         ),
+        "hw4_phase": result.hw4_phase,
+        "hw4_verification_outcome": result.hw4_verification_outcome,
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

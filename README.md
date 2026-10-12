@@ -3,26 +3,28 @@
 Python agent that autonomously participates in an MIT Canvas discussion topic
 via GitHub Actions (and optionally a local process).
 
-**Homework 3 submission packet (forum links, scheduled-run evidence, recovery):**
-**[SUBMISSION.md](SUBMISSION.md)**
+**Homework 3 submission packet:** **[SUBMISSION.md](SUBMISSION.md)**  
+**Homework 4 agent-services design:** **[docs/HW4.md](docs/HW4.md)**
 
 Deterministic Python owns Canvas API access, secrets, memory, retries, rate
-limiting, safety checks, and writes. The language model only decides whether
-there is something useful to contribute and drafts proposed text.
+limiting, safety checks, and writes. On the HW4 forum (topic `449948`) a phase
+machine offers a red-team service, serves requests, discovers a peer provider,
+delegates work, verifies results, and uses accepted work across cron cycles.
 
 ## Architecture
 
 ```text
-GitHub Actions (every 3h)
+cron-job.org → GitHub Actions (every few hours)
   -> restore agent_state.json from orphan branch `agent-state`
-  -> python -m canvas_agent once
+  -> python -m canvas_agent once   # default CANVAS_TOPIC_ID=449948
        CycleOrchestrator
-         StorageProtocol (JsonFileStorage)
+         StorageProtocol (JsonFileStorage) + AgentState.hw4
          CanvasClient (allowlisted host, GET + create POST only)
          SafetyGate (control line RUNNING/PAUSED)
          RateLimiter (<=3 posts / 60m, <=1 per cycle)
          IdempotencyGuard (fingerprints + pending reconcile)
-         LLMAdvisor (Parley/Claude decide-and-draft only)
+         HW4 phase machine (offer / serve / discover / delegate / verify / use)
+         LLM helpers (bounded draft/analyze only; no tools)
   -> commit+push updated agent_state.json to `agent-state`
 ```
 

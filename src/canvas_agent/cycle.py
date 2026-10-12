@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path  # noqa: TC003 — used at runtime for HW4 paths
 
 from canvas_agent.canvas.client import (
     CanvasAmbiguousWriteError,
@@ -14,9 +14,11 @@ from canvas_agent.canvas.client import (
 )
 from canvas_agent.config import Config
 from canvas_agent.evidence import write_cycle_evidence
+from canvas_agent.hw4.phases import Hw4Idle, Hw4PlannedWrite, next_action, on_write_confirmed
 from canvas_agent.llm.protocol import LLMAdvisor
 from canvas_agent.logging_utils import redact
 from canvas_agent.models import (
+    AdvisorDecision,
     AgentState,
     CycleResult,
     DiscussionSnapshot,
@@ -145,19 +147,59 @@ class CycleOrchestrator:
                 state.seen_entry_ids.append(entry.id)
         self.storage.save(state)
 
-        prior_messages = [c.fingerprint[:12] for c in state.contributions]
-        own_texts = [
-            e.message_text
-            for e in snapshot.entries
-            if e.user_id == state.agent_user_id and e.message_text
-        ]
+        # Homework 4 topic uses the services state machine; HW3 free-form remains
+        # available only when CANVAS_TOPIC_ID points at a non-HW4 forum.
+        hw4_phase: str | None = None
+        hw4_verification: str | None = None
+        planned: Hw4PlannedWrite | None = None
+        parent_user_id: int | None = None
 
-        decision = self.advisor.decide_and_draft(
-            snapshot,
-            agent_user_id=state.agent_user_id,
-            prior_fingerprints=list(state.content_fingerprints),
-            prior_messages=own_texts or prior_messages,
-        )
+        if self.config.topic_id == 449948:
+            llm_client = getattr(self.advisor, "client", None)
+            llm_model = getattr(self.advisor, "model", None)
+            src_root = Path(__file__).resolve().parent
+            repo_root = src_root.parents[1]
+            action = next_action(
+                state,
+                snapshot,
+                llm_client=llm_client,
+                llm_model=llm_model,
+                src_root=src_root,
+                repo_root=repo_root,
+            )
+            self.storage.save(state)  # persist discovery/reconcile side effects
+            if isinstance(action, Hw4Idle):
+                logger.info("HW4 idle phase=%s: %s", action.phase, action.rationale)
+                return CycleResult(
+                    abstained=True,
+                    skipped_reason=f"hw4_idle:{action.rationale}",
+                    action="abstain",
+                    rationale=action.rationale,
+                    hw4_phase=action.phase,
+                    hw4_verification_outcome=action.verification_outcome,
+                )
+            planned = action
+            hw4_phase = planned.phase
+            decision = AdvisorDecision(
+                action="post",
+                kind=planned.kind,
+                parent_id=planned.parent_id,
+                message=planned.message,
+                rationale=planned.rationale,
+            )
+        else:
+            prior_messages = [c.fingerprint[:12] for c in state.contributions]
+            own_texts = [
+                e.message_text
+                for e in snapshot.entries
+                if e.user_id == state.agent_user_id and e.message_text
+            ]
+            decision = self.advisor.decide_and_draft(
+                snapshot,
+                agent_user_id=state.agent_user_id,
+                prior_fingerprints=list(state.content_fingerprints),
+                prior_messages=own_texts or prior_messages,
+            )
 
         try:
             decision = validate_decision(decision)
@@ -168,6 +210,7 @@ class CycleOrchestrator:
                 skipped_reason=f"invalid_draft:{exc}",
                 action="abstain",
                 rationale=str(exc),
+                hw4_phase=hw4_phase,
             )
 
         if decision.action == "abstain":
@@ -177,24 +220,38 @@ class CycleOrchestrator:
                 skipped_reason="abstain",
                 action="abstain",
                 rationale=decision.rationale,
+                hw4_phase=hw4_phase,
             )
 
         assert decision.kind is not None and decision.message is not None
 
-        parent_user_id: int | None = None
         if decision.kind is WriteKind.REPLY:
-            ok, skip, parent_user_id = self._peer_parent(
-                snapshot, decision.parent_id, state.agent_user_id
-            )
-            if not ok:
-                return CycleResult(
-                    abstained=True,
-                    skipped_reason=skip,
-                    action="skip",
-                    kind=decision.kind,
-                    parent_id=decision.parent_id,
-                    rationale=decision.rationale,
+            # HW4 replies may target our own offer thread when serving requests.
+            if planned is not None and planned.meta.get("type") == "serve":
+                if decision.parent_id != state.hw4.offer_entry_id:
+                    return CycleResult(
+                        abstained=True,
+                        skipped_reason="invalid_parent_id",
+                        action="skip",
+                        kind=decision.kind,
+                        parent_id=decision.parent_id,
+                        rationale=decision.rationale,
+                        hw4_phase=hw4_phase,
+                    )
+            else:
+                ok, skip, parent_user_id = self._peer_parent(
+                    snapshot, decision.parent_id, state.agent_user_id
                 )
+                if not ok:
+                    return CycleResult(
+                        abstained=True,
+                        skipped_reason=skip,
+                        action="skip",
+                        kind=decision.kind,
+                        parent_id=decision.parent_id,
+                        rationale=decision.rationale,
+                        hw4_phase=hw4_phase,
+                    )
 
         allowed, reason = self.rate_limiter.allow(state.post_timestamps)
         if not allowed:
@@ -205,6 +262,7 @@ class CycleOrchestrator:
                 kind=decision.kind,
                 parent_id=decision.parent_id,
                 rationale=decision.rationale,
+                hw4_phase=hw4_phase,
             )
 
         fp = fingerprint_for(decision.message, decision.parent_id)
@@ -214,12 +272,29 @@ class CycleOrchestrator:
             snapshot=snapshot,
             agent_user_id=state.agent_user_id,
         ):
+            # If our offer already exists, mark verified without rewriting
+            if planned is not None and planned.meta.get("type") == "offer":
+                state = self.storage.load()
+                if state.hw4.offer_entry_id is None:
+                    from canvas_agent.hw4.offer import find_existing_offer, offer_fingerprint
+
+                    found = find_existing_offer(
+                        snapshot,
+                        agent_user_id=state.agent_user_id,
+                        fingerprint=offer_fingerprint(),
+                    )
+                    if found is not None:
+                        state = on_write_confirmed(
+                            state, planned, canvas_entry_id=found
+                        )
+                        self.storage.save(state)
             return CycleResult(
                 skipped_reason="duplicate",
                 action="skip",
                 kind=decision.kind,
                 parent_id=decision.parent_id,
                 rationale=decision.rationale,
+                hw4_phase=hw4_phase,
             )
 
         pending = create_pending(
@@ -245,6 +320,7 @@ class CycleOrchestrator:
                 kind=decision.kind,
                 parent_id=decision.parent_id,
                 rationale=decision.rationale,
+                hw4_phase=hw4_phase,
             )
 
         if not may_post(control_status):
@@ -258,14 +334,16 @@ class CycleOrchestrator:
                 kind=decision.kind,
                 parent_id=decision.parent_id,
                 rationale=decision.rationale,
+                hw4_phase=hw4_phase,
             )
 
         if self.config.dry_run:
             logger.info(
-                "Dry-run: would post %s parent=%s parent_user_id=%s",
+                "Dry-run: would post %s parent=%s parent_user_id=%s phase=%s",
                 pending.kind,
                 pending.parent_id,
                 parent_user_id,
+                hw4_phase,
             )
             state = abandon_pending(self.storage.load(), pending.request_id)
             self.storage.save(state)
@@ -277,6 +355,7 @@ class CycleOrchestrator:
                 kind=decision.kind,
                 parent_id=decision.parent_id,
                 rationale=decision.rationale,
+                hw4_phase=hw4_phase,
             )
 
         # Mark submitted_unknown BEFORE the POST so a crash mid-flight is recoverable
@@ -305,6 +384,7 @@ class CycleOrchestrator:
                 kind=decision.kind,
                 parent_id=decision.parent_id,
                 rationale=decision.rationale,
+                hw4_phase=hw4_phase,
             )
         if not may_post(control_status):
             block = explain_block(control_status)
@@ -317,6 +397,7 @@ class CycleOrchestrator:
                 kind=decision.kind,
                 parent_id=decision.parent_id,
                 rationale=decision.rationale,
+                hw4_phase=hw4_phase,
             )
 
         try:
@@ -325,9 +406,10 @@ class CycleOrchestrator:
             else:
                 assert current_pending.parent_id is not None
                 logger.info(
-                    "Posting reply parent_id=%s parent_user_id=%s",
+                    "Posting reply parent_id=%s parent_user_id=%s phase=%s",
                     current_pending.parent_id,
                     parent_user_id,
+                    hw4_phase,
                 )
                 created = self.canvas.create_reply(
                     current_pending.parent_id, current_pending.message_plain
@@ -344,6 +426,7 @@ class CycleOrchestrator:
                 kind=decision.kind,
                 parent_id=decision.parent_id,
                 rationale=decision.rationale,
+                hw4_phase=hw4_phase,
             )
         except CanvasError as exc:
             logger.error("Canvas write failed: %s", type(exc).__name__)
@@ -360,6 +443,9 @@ class CycleOrchestrator:
         state = confirm_pending(
             state, pending_now, canvas_entry_id=entry_id, verified=verified
         )
+        if planned is not None:
+            state = on_write_confirmed(state, planned, canvas_entry_id=entry_id)
+            hw4_verification = str(planned.meta.get("verification_outcome") or "") or None
         state.post_timestamps = self.rate_limiter.record(state.post_timestamps)
         self.storage.save(state)
 
@@ -376,9 +462,11 @@ class CycleOrchestrator:
                 kind=decision.kind,
                 parent_id=decision.parent_id,
                 rationale=decision.rationale,
+                hw4_phase=hw4_phase,
+                hw4_verification_outcome=hw4_verification,
             )
 
-        logger.info("Posted and verified entry_id=%s", entry_id)
+        logger.info("Posted and verified entry_id=%s phase=%s", entry_id, hw4_phase)
         return CycleResult(
             posted=True,
             contribution=contribution,
@@ -386,4 +474,6 @@ class CycleOrchestrator:
             kind=decision.kind,
             parent_id=decision.parent_id,
             rationale=decision.rationale,
+            hw4_phase=hw4_phase,
+            hw4_verification_outcome=hw4_verification,
         )

@@ -39,6 +39,14 @@ class ParleyAdvisor:
             self._client = OpenAI(api_key=api_key, base_url=base_url)
         self._model = model
 
+    @property
+    def client(self) -> Any:
+        return self._client
+
+    @property
+    def model(self) -> str:
+        return self._model
+
     def decide_and_draft(
         self,
         snapshot: DiscussionSnapshot,

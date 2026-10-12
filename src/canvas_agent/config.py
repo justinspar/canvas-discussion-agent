@@ -64,7 +64,7 @@ class Config:
             ).rstrip("/"),
             canvas_token=token,
             course_id=int(os.environ.get("CANVAS_COURSE_ID", "40577")),
-            topic_id=int(os.environ.get("CANVAS_TOPIC_ID", "448963")),
+            topic_id=int(os.environ.get("CANVAS_TOPIC_ID", "449948")),
             dry_run=env_dry if dry_run is None else dry_run,
             interval_hours=float(os.environ.get("CANVAS_AGENT_INTERVAL_HOURS", "3")),
             max_consecutive_failures=int(
