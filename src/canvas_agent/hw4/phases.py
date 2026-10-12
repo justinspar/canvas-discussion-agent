@@ -171,10 +171,18 @@ def next_action(
             },
         )
 
-    # 3) One-time clarification under our own offer (posts cannot be edited)
+    # 3) One-time clarification under our own offer only if the live offer is
+    # still the old wall-of-text format (Canvas posts cannot be edited).
     if hw4.offer_clarification_id is None and hw4.offer_entry_id is not None:
         clar_fp = offer.clarification_fingerprint(hw4.offer_entry_id)
-        # Reconcile if already posted in a prior cycle / lost ack
+        live_offer = next(
+            (e for e in snapshot.entries if e.id == hw4.offer_entry_id), None
+        )
+        live_text = (live_offer.message_text if live_offer else "") or ""
+        already_clear = (
+            "**What I need from you**" in live_text
+            and "SERVICE OFFER:" in live_text
+        )
         for entry in snapshot.entries:
             if (
                 entry.parent_id == hw4.offer_entry_id
@@ -184,7 +192,10 @@ def next_action(
             ):
                 hw4.offer_clarification_id = entry.id
                 break
-        if hw4.offer_clarification_id is None:
+        if already_clear and hw4.offer_clarification_id is None:
+            # Mark satisfied without posting a redundant self-reply.
+            hw4.offer_clarification_id = hw4.offer_entry_id
+        elif hw4.offer_clarification_id is None:
             return Hw4PlannedWrite(
                 phase="offer_clarification",
                 kind=WriteKind.REPLY,

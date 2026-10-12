@@ -120,24 +120,21 @@ def test_offer_posted_once_and_duplicate_prevented(hw4_config, tmp_storage) -> N
     assert state.hw4.offer_entry_id is not None
 
     second = orch.run_once()
-    # Clarification under own offer (not a second top-level offer)
-    assert second.posted is True
-    assert second.hw4_phase == "offer_clarification"
+    # New-format offers skip the redundant self-reply clarification.
     offer_top = [
         p
         for p in canvas.posts
         if p["parent_id"] is None and SERVICE_TITLE in (p["message"] or "")
     ]
     assert len(offer_top) == 1
-    state = tmp_storage.load()
-    assert state.hw4.offer_clarification_id is not None
-
-    third = orch.run_once()
     clar_posts = [
         p for p in canvas.posts if "Clarifying my service offer" in (p["message"] or "")
     ]
-    assert len(clar_posts) == 1
-    assert third.hw4_phase != "offer_clarification" or not third.posted
+    assert len(clar_posts) == 0
+    state = tmp_storage.load()
+    assert state.hw4.offer_clarification_id is not None
+    assert second.hw4_phase != "offer_service"
+    assert second.hw4_phase != "offer_clarification" or not second.posted
 
 
 def test_malicious_instructions_ignored_in_profile() -> None:
@@ -289,30 +286,55 @@ def test_delegate_request_complete_and_once(hw4_config, tmp_storage) -> None:
     assert r2.skipped_reason and "waiting" in (r2.skipped_reason or "")
 
 
-def test_delegation_tailored_to_safety_audit_offer() -> None:
+def test_delegation_tailored_to_exchange_audit_offer() -> None:
+    """Louis-style offer: audit exchange *text*, not our agent internals."""
     offer_text = (
-        "SERVICE OFFER: Canvas Agent Safety & Verification Audit\n"
-        "I offer safety and reliability audits for autonomous agents "
-        "(control line, lost ack, rate limits)."
+        "Service offer: Canvas Agent Safety & Verification Audit\n"
+        "What it does: my agent reviews a proposed Canvas-agent service offer, "
+        "request, or returned result before you rely on it. It checks whether the "
+        "exchange is self-contained, whether the expected output is clear, whether "
+        "the verification method is meaningful, and whether the safety controls "
+        "protect credentials and treat peer text as untrusted input.\n"
+        "What to send: The service offer, request, result, or short design spec.\n"
+        "What you get back: checklist, safety concerns, verification suggestions, "
+        "and ACCEPT, REVISE, or REJECT.\n"
+        "Availability: my agent checks the HW4 forum every few hours. It reads the "
+        "course-team control line before writing and stays within three writes/hour.\n"
+        "Boundary: this is a planning and verification audit, not security certification."
     )
     cand = ProviderCandidate(
         entry_id=232449,
         user_id=9,
         score=20.0,
         reason="test",
-        title_snippet="SERVICE OFFER: Canvas Agent Safety",
+        title_snippet="Service offer: Canvas Agent Safety",
         offer_excerpt=offer_text[:800],
     )
+    from canvas_agent.hw4.delegate import classify_capability
+
+    assert classify_capability(offer_text) == "exchange_audit"
     built = build_request_message(cand, offer_text=offer_text)
     assert built is not None
     message, task, criteria, _deadline = built
     assert "You offered:" in message
-    assert "Safety" in message or "audit" in message.casefold()
-    assert "control" in task.casefold() or "idempot" in task.casefold()
+    assert "BEGIN OFFER TO AUDIT" in task
+    assert "SERVICE OFFER" in task
+    assert "lost-ack" not in task.casefold()
+    assert "accept" in criteria.casefold() and "reject" in criteria.casefold()
     assert "clinic" not in message.casefold()
-    assert "acceptance" in criteria.casefold() or "verif" in criteria.casefold()
     chosen = choose_task_for_provider(cand, offer_text=offer_text)
     assert chosen is not None
+
+
+def test_availability_boilerplate_does_not_force_internals_audit() -> None:
+    from canvas_agent.hw4.delegate import classify_capability
+
+    offer = (
+        "SERVICE OFFER: Pre-post safety check for agent drafts\n"
+        "What it does: before your agent posts, send me the draft. I run seven rules.\n"
+        "Availability: reads the course-team control line; rate limit; lost ack."
+    )
+    assert classify_capability(offer) == "draft_safety"
 
 
 def test_hw4_forum_instructions_cover_key_rules() -> None:
@@ -339,18 +361,15 @@ def test_unsuitable_provider_rejected_and_rediscover() -> None:
     )
     safety = (
         "SERVICE OFFER: Canvas Agent Safety & Verification Audit\n"
-        "I offer reliability and safety audits for autonomous Canvas agents."
+        "What it does: my agent reviews a proposed Canvas-agent service offer, "
+        "request, or returned result before you rely on it. Checklist + "
+        "ACCEPT, REVISE, or REJECT.\n"
+        "Availability: reads the course-team control line before writing."
     )
     snap = _snap(
         DiscussionEntry(id=10, user_id=100, parent_id=None, message_text=OFFER_BODY),
         DiscussionEntry(id=232520, user_id=50, parent_id=None, message_text=clinic),
         DiscussionEntry(id=232449, user_id=60, parent_id=None, message_text=safety),
-        DiscussionEntry(
-            id=99,
-            user_id=100,
-            parent_id=10,
-            message_text="Clarifying my service offer\n" + OFFER_BODY,
-        ),
     )
     state = AgentState(
         agent_user_id=100,

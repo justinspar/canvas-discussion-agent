@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from canvas_agent.hw4.discover import is_suitable_provider
+from canvas_agent.hw4.discover import capability_focus, is_suitable_provider
+from canvas_agent.hw4.offer import OFFER_BODY, SERVICE_TITLE
 from canvas_agent.hw4.sanitize_peer import neutralize_injection
 from canvas_agent.models import ProviderCandidate
 
@@ -13,12 +15,11 @@ DEFAULT_DEADLINE_HOURS = 48
 
 
 def summarize_capability(offer_text: str, *, max_chars: int = 280) -> str:
-    plain = neutralize_injection(offer_text).strip()
-    if not plain:
+    focus = capability_focus(offer_text)
+    if not focus:
         return "(no offer text available)"
-    # Prefer first non-empty line + a bit of body
-    lines = [ln.strip() for ln in plain.splitlines() if ln.strip()]
-    head = lines[0] if lines else plain[:120]
+    lines = [ln.strip() for ln in focus.splitlines() if ln.strip()]
+    head = lines[0] if lines else focus[:120]
     body = " ".join(lines[1:4]) if len(lines) > 1 else ""
     summary = f"{head} — {body}".strip(" —") if body else head
     return summary[:max_chars]
@@ -28,26 +29,76 @@ def classify_capability(offer_text: str) -> str | None:
     """Map provider offer to a task bucket we actually need, or None if mismatch."""
     if not is_suitable_provider(offer_text):
         return None
-    plain = neutralize_injection(offer_text).casefold()
+    focus = capability_focus(offer_text).casefold()
+    if not focus:
+        return None
 
+    # Exchange / planning audit: they review offer/request/result *text*, not our internals.
     if any(
-        k in plain
+        k in focus
         for k in (
-            "safety",
-            "verification",
-            "audit",
-            "reliab",
-            "control line",
-            "idempoten",
-            "rate limit",
-            "lost ack",
-            "prompt injection",
+            "service offer, request, or returned result",
+            "offer, request, or returned result",
+            "proposed canvas-agent service",
+            "before you rely on it",
+            "accept, revise, or reject",
+            "accept / revise / reject",
+            "completeness and ambiguity",
+            "planning and verification audit",
         )
+    ) or (
+        "audit" in focus
+        and any(k in focus for k in ("offer", "request", "returned result", "design spec"))
+        and any(k in focus for k in ("checklist", "accept", "revise", "reject", "self-contained"))
+    ):
+        return "exchange_audit"
+
+    # Pre-post draft safety check
+    if any(
+        k in focus
+        for k in (
+            "pre-post",
+            "before your agent posts",
+            "before you post",
+            "draft",
+        )
+    ) and any(k in focus for k in ("safety", "check", "rules", "scan")):
+        return "draft_safety"
+
+    # True agent-reliability / internals audit (must look like auditing the agent, not ops text)
+    if any(
+        k in focus
+        for k in (
+            "failure mode",
+            "idempoten",
+            "lost ack",
+            "lost acknowledgement",
+            "rate-limit failure",
+            "reliability audit",
+            "red-team",
+            "red team",
+        )
+    ) or (
+        "audit" in focus
+        and any(
+            k in focus
+            for k in (
+                "autonomous agent",
+                "autonomous canvas agent",
+                "agent design",
+                "agent architecture",
+                "workflow",
+                "reliability",
+                "for autonomous",
+            )
+        )
+        and "offer, request" not in focus
+        and "returned result" not in focus
     ):
         return "safety_audit"
 
     if any(
-        k in plain
+        k in focus
         for k in (
             "pytest",
             "adversarial",
@@ -56,31 +107,73 @@ def classify_capability(offer_text: str) -> str | None:
             "test design",
             "test generation",
             "unit test",
-            "qa",
+            "test suite",
         )
     ):
         return "test_design"
 
-    if any(k in plain for k in ("code review", "debug", "validat", "verif")) and any(
-        k in plain for k in ("agent", "canvas", "autonomous")
+    if any(k in focus for k in ("code review", "debug")) and any(
+        k in focus for k in ("agent", "canvas", "autonomous")
     ):
         return "code_review"
 
-    if "research" in plain or "source" in plain or "diligence" in plain:
-        # Only if already passed agent suitability
-        if any(k in plain for k in ("agent", "canvas", "autonomous", "safety")):
+    if any(k in focus for k in ("research", "source check", "diligence", "public-source")):
+        if any(k in focus for k in ("agent", "canvas", "autonomous", "safety", "api")):
             return "research"
         return None
 
-    if any(k in plain for k in ("test", "review")) and any(
-        k in plain for k in ("agent", "canvas", "autonomous")
+    # Last resort: agent testing/QA wording in the focus section only
+    if any(k in focus for k in ("qa", "testing")) and any(
+        k in focus for k in ("agent", "canvas", "autonomous")
     ):
         return "test_design"
 
     return None
 
 
+def _excerpt_for_audit(text: str, *, max_chars: int = 900) -> str:
+    cleaned = re.sub(r"\n{3,}", "\n\n", text.strip())
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return cleaned[: max_chars - 20].rstrip() + "\n…[truncated]"
+
+
 def _task_for_capability(capability: str) -> dict[str, str]:
+    if capability == "exchange_audit":
+        payload = _excerpt_for_audit(OFFER_BODY)
+        return {
+            "task": (
+                "Please audit the following Canvas-agent service offer text before we keep "
+                "relying on it as our HW4 offer. Public/synthetic class content only.\n\n"
+                f"--- BEGIN OFFER TO AUDIT ---\n{payload}\n--- END OFFER ---\n\n"
+                "What we plan to do with your result: revise our offer wording and "
+                "request-handling checklist if you recommend REVISE/REJECT; keep using it "
+                "if you recommend ACCEPT."
+            ),
+            "criteria": (
+                "Acceptance: reply with (1) concrete missing/ambiguous items if any, "
+                "(2) safety guidance (credentials / untrusted peer text / injection), "
+                "(3) verification suggestions we can run locally, and "
+                "(4) a final recommendation ACCEPT, REVISE, or REJECT. "
+                "No secrets. We will check that those four elements are present."
+            ),
+        }
+    if capability == "draft_safety":
+        draft = (
+            f"Draft reply under a peer offer:\n"
+            f"Requesting a short reliability note on {SERVICE_TITLE} inputs "
+            f"(purpose/tools/memory/constraints). No secrets."
+        )
+        return {
+            "task": (
+                "Please run your pre-post safety check on this agent draft before we would post it:\n\n"
+                f"--- BEGIN DRAFT ---\n{draft}\n--- END DRAFT ---"
+            ),
+            "criteria": (
+                "Acceptance: a deterministic-style safety report covering your advertised "
+                "checks, with a clear pass/fail or equivalent. No secrets."
+            ),
+        }
     if capability == "safety_audit":
         return {
             "task": (
@@ -166,7 +259,8 @@ def build_request_message(
     message = (
         f"Service request (request_id={request_id})\n\n"
         f"You offered: {capability_summary}\n\n"
-        f"Please perform work inside that advertised capability.\n\n"
+        f"Please perform work inside that advertised capability "
+        f"(not unrelated agent-internals work).\n\n"
         f"Inputs / task:\n{chosen['task']}\n\n"
         f"Result I want + how I will check it:\n{chosen['criteria']}\n\n"
         f"Deadline (UTC): {deadline.isoformat()}\n\n"

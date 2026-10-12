@@ -17,13 +17,12 @@ SERVICE_FRAME_SIGNALS = (
     "what you get",
 )
 
+# Score these mainly in the capability-focus section (not Availability boilerplate).
 AGENT_RELEVANCE = (
     ("canvas", 3.0),
     ("agent", 2.5),
     ("autonomous", 2.5),
-    ("control line", 4.0),
     ("idempoten", 3.5),
-    ("rate limit", 3.0),
     ("prompt injection", 3.5),
     ("pytest", 3.0),
     ("reliab", 3.0),
@@ -36,6 +35,14 @@ AGENT_RELEVANCE = (
     ("lost ack", 3.5),
     ("acknowledgement", 2.0),
     ("discussion", 1.5),
+    ("self-contained", 2.0),
+    ("design spec", 2.0),
+)
+
+# Ops words: count only lightly, and only from focus text after stripping Availability.
+OPS_KEYWORDS = (
+    ("control line", 1.0),
+    ("rate limit", 1.0),
 )
 
 PREFERRED_KEYWORDS = (
@@ -48,6 +55,7 @@ PREFERRED_KEYWORDS = (
     ("verif", 2.0),
     ("research", 1.0),
     ("security", 2.0),
+    ("checklist", 2.0),
 )
 
 OFF_DOMAIN_PENALTIES = (
@@ -64,9 +72,56 @@ OFF_DOMAIN_PENALTIES = (
     ("co-op", 3.0),
     ("sonar", 4.0),
     ("robotics and ai concept", 3.0),
+    ("triathlete", 10.0),
+    ("runners and", 8.0),
+    ("season planner", 10.0),
+    ("dice", 8.0),
+    ("card probabilities", 10.0),
+    ("training bible", 10.0),
+    ("fair draw", 6.0),
 )
 
 MIN_SCORE = 5.0
+
+_CAPABILITY_MARKERS = (
+    "what it does",
+    "what i can do",
+    "what my agent does",
+    "what we do",
+    "what you get",
+    "what to send",
+)
+
+
+def capability_focus(offer_text: str) -> str:
+    """Advertised capability text, excluding Availability/Boundary ops boilerplate."""
+    plain = neutralize_injection(offer_text).strip()
+    if not plain:
+        return ""
+    low = plain.casefold()
+    cut = len(plain)
+    for marker in (
+        "\navailability:",
+        "\navailability\n",
+        "\nboundary:",
+        "\nboundary\n",
+        "\nhow to check it:",
+    ):
+        idx = low.find(marker)
+        if idx != -1:
+            cut = min(cut, idx)
+    focused = plain[:cut].strip()
+    title = focused.splitlines()[0].strip() if focused.splitlines() else ""
+    body = focused
+    for marker in _CAPABILITY_MARKERS:
+        idx = focused.casefold().find(marker)
+        if idx != -1:
+            body = focused[idx:].strip()
+            break
+    # Keep the title line so keywords like "safety check" are not dropped.
+    if title and title.casefold() not in body.casefold()[: max(80, len(title) + 5)]:
+        return f"{title}\n{body}".strip()
+    return body or plain[:600]
 
 
 def has_service_frame(text: str) -> bool:
@@ -89,28 +144,34 @@ def score_offer_text(text: str) -> tuple[float, str, int]:
     if not has_service_frame(text):
         return 0.0, "no_service_frame", 0
 
+    focus = capability_focus(text).casefold()
     score = 1.0  # base for having a service frame
     hits: list[str] = ["service_frame"]
     agent_hits = 0
 
     for keyword, weight in AGENT_RELEVANCE:
-        if keyword in plain:
+        if keyword in focus:
             score += weight
             hits.append(keyword)
             agent_hits += 1
 
-    for keyword, weight in PREFERRED_KEYWORDS:
-        if keyword in plain:
+    for keyword, weight in OPS_KEYWORDS:
+        if keyword in focus:
             score += weight
             hits.append(keyword)
 
+    for keyword, weight in PREFERRED_KEYWORDS:
+        if keyword in focus:
+            score += weight
+            hits.append(keyword)
+
+    # Off-domain penalties still apply to the full post (title + body).
     for keyword, penalty in OFF_DOMAIN_PENALTIES:
         if keyword in plain:
             score -= penalty
             hits.append(f"-{keyword}")
 
     if agent_hits < 1:
-        # Generic "test/review" without agent/Canvas relevance is not enough
         score = min(score, MIN_SCORE - 0.1)
         hits.append("no_agent_relevance")
 
