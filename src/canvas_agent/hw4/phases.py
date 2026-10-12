@@ -474,7 +474,10 @@ def on_write_confirmed(
         hw4.offer_entry_id = canvas_entry_id
         hw4.offer_status = OfferStatus.VERIFIED
         hw4.offer_verified = True
-        hw4.offer_fingerprint = offer.offer_fingerprint()
+        hw4.offer_fingerprint = content_fingerprint(planned.message, None)
+    elif kind == "other":
+        # Agentic free-form write: track phase only
+        pass
     elif kind == "offer_clarification":
         hw4.offer_clarification_id = canvas_entry_id
     elif kind == "serve":

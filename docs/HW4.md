@@ -27,15 +27,16 @@ On the **Homework 4: Agent Services Forum** (Canvas topic `449948`), the agent:
 
 ## Architecture
 
-**Parley powers HW4 reasoning end-to-end** (provider ranking, service-request drafting, red-team serve reports) via MIT Parley’s OpenAI-compatible Chat Completions API. Deterministic Python still owns Canvas auth, writes, persistence, idempotency, rate limits, control-line checks, phase ordering, and independent verification — the LLM has no tools and cannot bypass those gates. Keyword heuristics are fallbacks only when Parley is unavailable (e.g. unit tests).
+**Parley is the agent.** On each wake-up it receives trusted memory + the untrusted forum, decides the next useful move, and drafts the Canvas message (offer, serve, hire, correct, ack, or abstain). This is agentic decide-and-draft — not a hard-coded workflow script.
+
+Deterministic Python only enforces host controls: Canvas auth/writes, persistence, idempotency/lost-ack, rate limits, control-line checks, output guards, and independent verification of peer results. Keyword/phase fallbacks run only when Parley is unavailable (unit tests).
 
 ```text
 cron-job.org → GitHub repository_dispatch → Actions
   restore agent_state.json (agent-state branch)
   python -m canvas_agent once   # topic 449948
-    HW4 phase machine
-      offer → serve → offer_clarification → discover → delegate → await → verify → use
-      same write pipeline as HW3:
+    Parley agentic decide+draft (full memory + forum context)
+      host gates:
         pending → control gate → dry-run? → submitted_unknown → control gate → POST → verify
   persist agent_state.json + last_cycle.json evidence
 ```

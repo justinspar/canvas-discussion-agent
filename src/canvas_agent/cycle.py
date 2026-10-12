@@ -14,6 +14,7 @@ from canvas_agent.canvas.client import (
 )
 from canvas_agent.config import Config
 from canvas_agent.evidence import write_cycle_evidence
+from canvas_agent.hw4 import agentic as hw4_agentic
 from canvas_agent.hw4.phases import Hw4Idle, Hw4PlannedWrite, next_action, on_write_confirmed
 from canvas_agent.llm.protocol import LLMAdvisor
 from canvas_agent.logging_utils import redact
@@ -157,22 +158,30 @@ class CycleOrchestrator:
         if self.config.topic_id == 449948:
             llm_client = getattr(self.advisor, "client", None)
             llm_model = getattr(self.advisor, "model", None)
-            if llm_client is None or not llm_model:
-                logger.error(
-                    "HW4 requires Parley LLM for reasoning, but advisor has no client/model"
-                )
-            else:
-                logger.info("HW4 Parley reasoning enabled model=%s", llm_model)
             src_root = Path(__file__).resolve().parent
             repo_root = src_root.parents[1]
-            action = next_action(
-                state,
-                snapshot,
-                llm_client=llm_client,
-                llm_model=llm_model,
-                src_root=src_root,
-                repo_root=repo_root,
-            )
+            if llm_client is not None and llm_model:
+                logger.info("HW4 agentic Parley decide+draft model=%s", llm_model)
+                action = hw4_agentic.decide_next(
+                    state,
+                    snapshot,
+                    llm_client=llm_client,
+                    llm_model=llm_model,
+                    src_root=src_root,
+                    repo_root=repo_root,
+                )
+            else:
+                logger.warning(
+                    "HW4 Parley unavailable; using deterministic phase fallback"
+                )
+                action = next_action(
+                    state,
+                    snapshot,
+                    llm_client=llm_client,
+                    llm_model=llm_model,
+                    src_root=src_root,
+                    repo_root=repo_root,
+                )
             self.storage.save(state)  # persist discovery/reconcile side effects
             if isinstance(action, Hw4Idle):
                 logger.info("HW4 idle phase=%s: %s", action.phase, action.rationale)
@@ -232,7 +241,7 @@ class CycleOrchestrator:
         assert decision.kind is not None and decision.message is not None
 
         if decision.kind is WriteKind.REPLY:
-            # HW4 may reply under our own offer when serving or clarifying the offer.
+            # HW4 may reply under our own offer when serving / clarifying.
             allow_self_parent = planned is not None and planned.meta.get("type") in {
                 "serve",
                 "offer_clarification",
@@ -253,15 +262,30 @@ class CycleOrchestrator:
                     snapshot, decision.parent_id, state.agent_user_id
                 )
                 if not ok:
-                    return CycleResult(
-                        abstained=True,
-                        skipped_reason=skip,
-                        action="skip",
-                        kind=decision.kind,
-                        parent_id=decision.parent_id,
-                        rationale=decision.rationale,
-                        hw4_phase=hw4_phase,
+                    # Agentic path: allow reply under own offer only for serve-like intents
+                    parent = next(
+                        (e for e in snapshot.entries if e.id == decision.parent_id),
+                        None,
                     )
+                    if (
+                        planned is not None
+                        and planned.meta.get("agentic")
+                        and parent is not None
+                        and state.agent_user_id is not None
+                        and parent.user_id == state.agent_user_id
+                        and decision.parent_id == state.hw4.offer_entry_id
+                    ):
+                        parent_user_id = parent.user_id
+                    else:
+                        return CycleResult(
+                            abstained=True,
+                            skipped_reason=skip,
+                            action="skip",
+                            kind=decision.kind,
+                            parent_id=decision.parent_id,
+                            rationale=decision.rationale,
+                            hw4_phase=hw4_phase,
+                        )
 
         allowed, reason = self.rate_limiter.allow(state.post_timestamps)
         if not allowed:
