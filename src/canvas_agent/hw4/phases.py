@@ -223,6 +223,14 @@ def next_action(
                 phase="delegation_exhausted",
                 rationale="no_more_provider_retries",
             )
+        # Always refresh candidates so LLM/deterministic drafting sees current offers.
+        candidates = discover.list_candidate_providers(
+            snapshot,
+            agent_user_id=state.agent_user_id,
+            rejected_ids=list(hw4.rejected_provider_entry_ids),
+        )
+        hw4.candidate_providers = candidates
+
         if (
             hw4.selected_provider_entry_id is None
             or hw4.delegation_status
@@ -232,15 +240,31 @@ def next_action(
                 DelegationStatus.REJECTED,
             }
         ):
-            candidates = discover.list_candidate_providers(
-                snapshot,
-                agent_user_id=state.agent_user_id,
-                rejected_ids=list(hw4.rejected_provider_entry_ids),
-            )
-            hw4.candidate_providers = candidates
             chosen = discover.select_provider(candidates)
             if chosen is None:
                 return Hw4Idle(phase="discover_provider", rationale="no_suitable_provider")
+            # Exchange auditors require a draft service request to a worker peer.
+            offer_preview = discover.provider_offer_text(snapshot, chosen.entry_id)
+            if delegate.classify_capability(offer_preview) == "exchange_audit":
+                worker = delegate.pick_worker_for_draft(
+                    candidates, exclude_entry_id=chosen.entry_id
+                )
+                if worker is None:
+                    for alt in candidates:
+                        if alt.entry_id == chosen.entry_id:
+                            continue
+                        alt_text = discover.provider_offer_text(snapshot, alt.entry_id)
+                        if delegate.classify_capability(alt_text) not in {
+                            None,
+                            "exchange_audit",
+                        }:
+                            chosen = alt
+                            break
+                    else:
+                        return Hw4Idle(
+                            phase="discover_provider",
+                            rationale="exchange_auditor_needs_draft_request",
+                        )
             hw4.selected_provider_entry_id = chosen.entry_id
             hw4.selected_provider_user_id = chosen.user_id
             if hw4.delegation_status != DelegationStatus.NONE:
@@ -267,7 +291,13 @@ def next_action(
                     offer_excerpt=offer_text[:800],
                     title_snippet=(offer_text.strip().splitlines() or [""])[0][:160],
                 )
-            built = delegate.build_request_message(cand, offer_text=offer_text)
+            built = delegate.build_request_message(
+                cand,
+                offer_text=offer_text,
+                peer_candidates=list(hw4.candidate_providers),
+                llm_client=llm_client,
+                llm_model=llm_model,
+            )
             if built is None:
                 _reject_provider(hw4, reason="capability_mismatch")
                 return Hw4Idle(

@@ -4,14 +4,23 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from uuid import uuid4
 
 from canvas_agent.hw4.discover import capability_focus, is_suitable_provider
-from canvas_agent.hw4.offer import OFFER_BODY, SERVICE_TITLE
+from canvas_agent.hw4.llm_helpers import reason_service_request
+from canvas_agent.hw4.offer import SERVICE_TITLE
 from canvas_agent.hw4.sanitize_peer import neutralize_injection
 from canvas_agent.models import ProviderCandidate
 
 DEFAULT_DEADLINE_HOURS = 48
+
+OUR_NEEDS = (
+    "We run an autonomous Canvas discussion agent (HW4). We need useful peer help: "
+    "either (a) an exchange/planning audit of a draft SERVICE REQUEST before we post it, "
+    "or (b) direct work such as pytest/edge-case tests, reliability audit of failure modes, "
+    "code review of write-path races, or short public-source research. No secrets."
+)
 
 
 def summarize_capability(offer_text: str, *, max_chars: int = 280) -> str:
@@ -33,7 +42,6 @@ def classify_capability(offer_text: str) -> str | None:
     if not focus:
         return None
 
-    # Exchange / planning audit: they review offer/request/result *text*, not our internals.
     if any(
         k in focus
         for k in (
@@ -53,7 +61,6 @@ def classify_capability(offer_text: str) -> str | None:
     ):
         return "exchange_audit"
 
-    # Pre-post draft safety check
     if any(
         k in focus
         for k in (
@@ -65,7 +72,6 @@ def classify_capability(offer_text: str) -> str | None:
     ) and any(k in focus for k in ("safety", "check", "rules", "scan")):
         return "draft_safety"
 
-    # True agent-reliability / internals audit (must look like auditing the agent, not ops text)
     if any(
         k in focus
         for k in (
@@ -122,7 +128,6 @@ def classify_capability(offer_text: str) -> str | None:
             return "research"
         return None
 
-    # Last resort: agent testing/QA wording in the focus section only
     if any(k in focus for k in ("qa", "testing")) and any(
         k in focus for k in ("agent", "canvas", "autonomous")
     ):
@@ -131,33 +136,14 @@ def classify_capability(offer_text: str) -> str | None:
     return None
 
 
-def _excerpt_for_audit(text: str, *, max_chars: int = 900) -> str:
+def _excerpt(text: str, *, max_chars: int = 900) -> str:
     cleaned = re.sub(r"\n{3,}", "\n\n", text.strip())
     if len(cleaned) <= max_chars:
         return cleaned
     return cleaned[: max_chars - 20].rstrip() + "\n…[truncated]"
 
 
-def _task_for_capability(capability: str) -> dict[str, str]:
-    if capability == "exchange_audit":
-        payload = _excerpt_for_audit(OFFER_BODY)
-        return {
-            "task": (
-                "Please audit the following Canvas-agent service offer text before we keep "
-                "relying on it as our HW4 offer. Public/synthetic class content only.\n\n"
-                f"--- BEGIN OFFER TO AUDIT ---\n{payload}\n--- END OFFER ---\n\n"
-                "What we plan to do with your result: revise our offer wording and "
-                "request-handling checklist if you recommend REVISE/REJECT; keep using it "
-                "if you recommend ACCEPT."
-            ),
-            "criteria": (
-                "Acceptance: reply with (1) concrete missing/ambiguous items if any, "
-                "(2) safety guidance (credentials / untrusted peer text / injection), "
-                "(3) verification suggestions we can run locally, and "
-                "(4) a final recommendation ACCEPT, REVISE, or REJECT. "
-                "No secrets. We will check that those four elements are present."
-            ),
-        }
+def _direct_task(capability: str) -> dict[str, str]:
     if capability == "draft_safety":
         draft = (
             f"Draft reply under a peer offer:\n"
@@ -224,30 +210,135 @@ def _task_for_capability(capability: str) -> dict[str, str]:
     }
 
 
+def build_draft_service_request(
+    *,
+    worker_offer_text: str,
+    worker_entry_id: int | None = None,
+) -> str | None:
+    """
+    Prerequisite payload for exchange auditors: a complete draft service request
+    we intend to send to a *worker* provider (not the auditor).
+    """
+    cap = classify_capability(worker_offer_text)
+    if cap is None or cap == "exchange_audit":
+        return None
+    direct = _direct_task(cap)
+    target = summarize_capability(worker_offer_text)
+    dest = f"provider entry_id={worker_entry_id}" if worker_entry_id else "a suitable worker provider"
+    return (
+        f"DRAFT service request (not yet posted) to {dest}\n"
+        f"Target offer summary: {target}\n\n"
+        f"Inputs / task:\n{direct['task']}\n\n"
+        f"Result I want + how I will check it:\n{direct['criteria']}\n\n"
+        "Notes: public/synthetic class data only; no secrets or credentials."
+    )
+
+
+def pick_worker_for_draft(
+    peer_candidates: list[ProviderCandidate],
+    *,
+    exclude_entry_id: int | None,
+) -> ProviderCandidate | None:
+    for cand in peer_candidates:
+        if exclude_entry_id is not None and cand.entry_id == exclude_entry_id:
+            continue
+        text = cand.offer_excerpt or cand.title_snippet
+        cap = classify_capability(text)
+        if cap and cap != "exchange_audit":
+            return cand
+    return None
+
+
+def _exchange_audit_task(draft_request: str) -> dict[str, str]:
+    payload = _excerpt(draft_request, max_chars=1200)
+    return {
+        "task": (
+            "Please audit the following DRAFT service request before we post it to "
+            "another provider. This draft is the required input for your exchange/"
+            "planning audit (public/synthetic class content only).\n\n"
+            f"--- BEGIN DRAFT SERVICE REQUEST ---\n{payload}\n"
+            "--- END DRAFT SERVICE REQUEST ---\n\n"
+            "What we plan to do with your result: if ACCEPT, post a finalized request "
+            "to the target provider; if REVISE, incorporate your notes first; if REJECT, "
+            "choose a different provider/task."
+        ),
+        "criteria": (
+            "Acceptance: reply with (1) concrete missing/ambiguous items if any, "
+            "(2) safety guidance (credentials / untrusted peer text / injection), "
+            "(3) verification suggestions we can run locally, and "
+            "(4) a final recommendation ACCEPT, REVISE, or REJECT. "
+            "No secrets. We will check that those four elements are present."
+        ),
+    }
+
+
 def choose_task_for_provider(
-    candidate: ProviderCandidate, *, offer_text: str | None = None
+    candidate: ProviderCandidate,
+    *,
+    offer_text: str | None = None,
+    peer_candidates: list[ProviderCandidate] | None = None,
+    llm_client: Any | None = None,
+    llm_model: str | None = None,
 ) -> dict[str, str] | None:
     """Build a task inside the provider's advertised capability, or None if unsuitable."""
     text = offer_text if offer_text is not None else (candidate.offer_excerpt or "")
     if not text.strip():
         text = candidate.title_snippet or candidate.reason
+
+    peers = peer_candidates or []
+    worker = pick_worker_for_draft(peers, exclude_entry_id=candidate.entry_id)
+    draft_request = None
+    if worker is not None:
+        draft_request = build_draft_service_request(
+            worker_offer_text=worker.offer_excerpt or worker.title_snippet,
+            worker_entry_id=worker.entry_id,
+        )
+
+    # Prefer LLM reasoning when available.
+    llm = reason_service_request(
+        provider_offer=text,
+        draft_service_request=draft_request,
+        our_needs=OUR_NEEDS,
+        client=llm_client,
+        model=llm_model,
+    )
+    if llm is not None:
+        if not llm.get("suitable"):
+            return None
+        return {"task": str(llm["task"]), "criteria": str(llm["criteria"])}
+
+    # Deterministic fallback
     capability = classify_capability(text)
     if capability is None:
         return None
-    return _task_for_capability(capability)
+    if capability == "exchange_audit":
+        if not draft_request:
+            # Prerequisite missing: cannot honestly hire an exchange auditor yet.
+            return None
+        return _exchange_audit_task(draft_request)
+    return _direct_task(capability)
 
 
 def build_request_message(
     candidate: ProviderCandidate,
     *,
     offer_text: str | None = None,
+    peer_candidates: list[ProviderCandidate] | None = None,
+    llm_client: Any | None = None,
+    llm_model: str | None = None,
     now: datetime | None = None,
 ) -> tuple[str, str, str, datetime] | None:
     """
     Returns (message, task, criteria, deadline) or None if provider unsuitable.
     """
     text = offer_text if offer_text is not None else (candidate.offer_excerpt or "")
-    chosen = choose_task_for_provider(candidate, offer_text=text)
+    chosen = choose_task_for_provider(
+        candidate,
+        offer_text=text,
+        peer_candidates=peer_candidates,
+        llm_client=llm_client,
+        llm_model=llm_model,
+    )
     if chosen is None:
         return None
 
@@ -259,8 +350,7 @@ def build_request_message(
     message = (
         f"Service request (request_id={request_id})\n\n"
         f"You offered: {capability_summary}\n\n"
-        f"Please perform work inside that advertised capability "
-        f"(not unrelated agent-internals work).\n\n"
+        f"Please perform work inside that advertised capability.\n\n"
         f"Inputs / task:\n{chosen['task']}\n\n"
         f"Result I want + how I will check it:\n{chosen['criteria']}\n\n"
         f"Deadline (UTC): {deadline.isoformat()}\n\n"

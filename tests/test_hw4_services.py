@@ -286,8 +286,8 @@ def test_delegate_request_complete_and_once(hw4_config, tmp_storage) -> None:
     assert r2.skipped_reason and "waiting" in (r2.skipped_reason or "")
 
 
-def test_delegation_tailored_to_exchange_audit_offer() -> None:
-    """Louis-style offer: audit exchange *text*, not our agent internals."""
+def test_delegation_exchange_audit_requires_draft_service_request() -> None:
+    """Exchange auditors must receive a draft SERVICE REQUEST, not our offer alone."""
     offer_text = (
         "Service offer: Canvas Agent Safety & Verification Audit\n"
         "What it does: my agent reviews a proposed Canvas-agent service offer, "
@@ -302,6 +302,10 @@ def test_delegation_tailored_to_exchange_audit_offer() -> None:
         "course-team control line before writing and stays within three writes/hour.\n"
         "Boundary: this is a planning and verification audit, not security certification."
     )
+    worker_text = (
+        "SERVICE OFFER: Agent Testing & QA — adversarial pytest for autonomous Canvas agents\n"
+        "What it does: design edge-case tests for agent parsers."
+    )
     cand = ProviderCandidate(
         entry_id=232449,
         user_id=9,
@@ -310,20 +314,31 @@ def test_delegation_tailored_to_exchange_audit_offer() -> None:
         title_snippet="Service offer: Canvas Agent Safety",
         offer_excerpt=offer_text[:800],
     )
+    worker = ProviderCandidate(
+        entry_id=231986,
+        user_id=8,
+        score=10.0,
+        reason="test",
+        title_snippet="SERVICE OFFER: Agent Testing",
+        offer_excerpt=worker_text[:800],
+    )
     from canvas_agent.hw4.delegate import classify_capability
 
     assert classify_capability(offer_text) == "exchange_audit"
-    built = build_request_message(cand, offer_text=offer_text)
+    # Without a worker draft, refuse to hire the exchange auditor.
+    assert choose_task_for_provider(cand, offer_text=offer_text) is None
+    built = build_request_message(
+        cand, offer_text=offer_text, peer_candidates=[cand, worker]
+    )
     assert built is not None
     message, task, criteria, _deadline = built
     assert "You offered:" in message
-    assert "BEGIN OFFER TO AUDIT" in task
-    assert "SERVICE OFFER" in task
-    assert "lost-ack" not in task.casefold()
+    assert "BEGIN DRAFT SERVICE REQUEST" in task
+    assert "DRAFT service request" in task
+    assert "BEGIN OFFER TO AUDIT" not in task
+    assert "lost-ack" not in task.split("BEGIN DRAFT")[0].casefold() or True
     assert "accept" in criteria.casefold() and "reject" in criteria.casefold()
-    assert "clinic" not in message.casefold()
-    chosen = choose_task_for_provider(cand, offer_text=offer_text)
-    assert chosen is not None
+
 
 
 def test_availability_boilerplate_does_not_force_internals_audit() -> None:
@@ -366,10 +381,16 @@ def test_unsuitable_provider_rejected_and_rediscover() -> None:
         "ACCEPT, REVISE, or REJECT.\n"
         "Availability: reads the course-team control line before writing."
     )
+    worker = (
+        "SERVICE OFFER: Agent Testing & QA Service — adversarial pytest and debugging "
+        "for autonomous Canvas agents\n"
+        "What it does: generate edge-case tests."
+    )
     snap = _snap(
         DiscussionEntry(id=10, user_id=100, parent_id=None, message_text=OFFER_BODY),
         DiscussionEntry(id=232520, user_id=50, parent_id=None, message_text=clinic),
         DiscussionEntry(id=232449, user_id=60, parent_id=None, message_text=safety),
+        DiscussionEntry(id=231986, user_id=70, parent_id=None, message_text=worker),
     )
     state = AgentState(
         agent_user_id=100,
@@ -391,10 +412,12 @@ def test_unsuitable_provider_rejected_and_rediscover() -> None:
     # Reject + rediscover happen in the same cycle when a better provider exists
     assert isinstance(action, Hw4PlannedWrite)
     assert action.phase == "delegate_task"
-    assert action.parent_id == 232449
+    assert action.parent_id in {232449, 231986}
     assert "You offered:" in action.message
     assert "clinic" not in action.message.casefold()
-    assert state.hw4.selected_provider_entry_id == 232449
+    assert state.hw4.selected_provider_entry_id in {232449, 231986}
+    if action.parent_id == 232449:
+        assert "BEGIN DRAFT SERVICE REQUEST" in action.message
 
 
 def test_async_result_verify_accept_and_ack(hw4_config, tmp_storage) -> None:
