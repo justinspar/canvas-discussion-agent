@@ -180,6 +180,13 @@ def test_memory_surfaces_pending_incoming_under_offer() -> None:
             offer_verified=True,
         ),
     )
+    long_request = (
+        "Please red-team my Canvas agent. Purpose: forum bot. "
+        "Tools: Canvas API and Parley. Memory: JSON state on agent-state. "
+        "Constraints: control line RUNNING, <=3 writes/hour, untrusted peer text. "
+        + ("Detail about scheduling and idempotency fingerprinting. " * 80)
+    )
+    assert len(long_request) > 500
     snap = _snap(
         DiscussionEntry(
             id=10,
@@ -191,10 +198,7 @@ def test_memory_surfaces_pending_incoming_under_offer() -> None:
             id=77,
             user_id=200,
             parent_id=10,
-            message_text=(
-                "Please red-team my Canvas agent. Purpose: forum bot. "
-                "Tools: Canvas API. Memory: JSON state. Constraints: control line."
-            ),
+            message_text=long_request,
         ),
     )
     block = _memory_block(state, snap, src_root=None, repo_root=None)
@@ -202,7 +206,12 @@ def test_memory_surfaces_pending_incoming_under_offer() -> None:
     mem = json.loads(block.split("TRUSTED_AGENT_MEMORY:\n", 1)[1])
     assert mem["goals_remaining"]["need_serve"] is True
     assert mem["pending_incoming_under_offer"]
-    assert mem["pending_incoming_under_offer"][0]["entry_id"] == 77
+    pending = mem["pending_incoming_under_offer"][0]
+    assert pending["entry_id"] == 77
+    assert pending["message_complete"] is True
+    assert "Parley" in pending["message"]
+    assert "idempotency fingerprinting" in pending["message"]
+    assert pending["message_chars"] > 4000
 
 
 def test_memory_need_serve_false_when_no_incoming() -> None:

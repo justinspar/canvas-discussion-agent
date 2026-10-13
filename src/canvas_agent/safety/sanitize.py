@@ -10,14 +10,14 @@ UNTRUSTED_START = "<<<UNTRUSTED_DISCUSSION>>>"
 UNTRUSTED_END = "<<<END>>>"
 
 
-def sanitize_entry_text(text: str) -> str:
+def sanitize_entry_text(text: str, *, max_chars: int | None = 4000) -> str:
     plain = html_to_text(text)
     # Neutralize delimiter spoofing
     plain = plain.replace(UNTRUSTED_START, "[untrusted-marker]")
     plain = plain.replace(UNTRUSTED_END, "[untrusted-marker]")
-    # Cap individual message size for prompts
-    if len(plain) > 4000:
-        plain = plain[:4000] + "…"
+    # Cap individual message size for prompts (None = no cap)
+    if max_chars is not None and len(plain) > max_chars:
+        plain = plain[:max_chars] + "…"
     return plain
 
 

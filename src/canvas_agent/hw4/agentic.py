@@ -57,6 +57,9 @@ Host constraints (enforced outside you; do not violate):
 - If waiting on a provider with no new result AND no unanswered request under your
   own offer, abstain. An unanswered peer request under your offer is a serve—do that
   instead of waiting (SERVE beats WAIT).
+- TRUSTED_AGENT_MEMORY.pending_incoming_under_offer[].message is the full host-extracted
+  peer request (not a truncated forum skim). Serve from that text; do not ask for
+  clarification just because the untrusted forum dump looks cut off.
 - Keep request/result/checks/corrections in the same offer thread when delegating.
 
 Writing style:
@@ -177,11 +180,26 @@ def _peer_format_examples(
 
 
 def _format_forum_context(
-    snapshot: DiscussionSnapshot, *, agent_user_id: int | None
+    snapshot: DiscussionSnapshot,
+    *,
+    agent_user_id: int | None,
+    offer_entry_id: int | None = None,
 ) -> str:
-    """Include own posts — the agent needs its offer/request history."""
+    """Include own posts — the agent needs its offer/request history.
+
+    Own-offer thread is listed first so peer requests under it survive truncation.
+    """
     lines = [UNTRUSTED_START, f"topic_id={snapshot.topic_id}"]
+    priority: list = []
+    rest: list = []
     for entry in snapshot.entries:
+        if offer_entry_id is not None and (
+            entry.id == offer_entry_id or entry.parent_id == offer_entry_id
+        ):
+            priority.append(entry)
+        else:
+            rest.append(entry)
+    for entry in priority + rest:
         msg = sanitize_entry_text(entry.message_text or "")
         mine = (
             " OWN"
@@ -264,6 +282,9 @@ def _memory_block(
                     )
 
     # Full-snapshot pending serves (survives truncated forum excerpts).
+    # First pending gets the full body (peers may send ~6k); others capped.
+    _PENDING_FULL_CAP = 8000
+    _PENDING_OTHER_CAP = 2000
     pending_incoming: list[dict[str, Any]] = []
     done_ids = serve.completed_or_clarify_ids(hw4)
     if hw4.offer_entry_id is not None:
@@ -272,14 +293,20 @@ def _memory_block(
         ):
             if entry.id in done_ids:
                 continue
+            cap = _PENDING_FULL_CAP if not pending_incoming else _PENDING_OTHER_CAP
+            raw = neutralize_injection(entry.message_text or "", max_chars=cap)
+            incomplete = raw.endswith("…")
+            body = raw[:-1] if incomplete else raw
             pending_incoming.append(
                 {
                     "entry_id": entry.id,
                     "user_id": entry.user_id,
-                    "excerpt": neutralize_injection(entry.message_text or "")[:400],
+                    "message": body,
+                    "message_complete": not incomplete,
+                    "message_chars": len(body),
                 }
             )
-            if len(pending_incoming) >= 5:
+            if len(pending_incoming) >= 3:
                 break
     need_serve = len(pending_incoming) > 0
 
@@ -326,7 +353,7 @@ def _memory_block(
             "need_ack": bool(verify_note and verify_note.get("accepted")),
         },
     }
-    return "TRUSTED_AGENT_MEMORY:\n" + json.dumps(mem, indent=2)[:12000]
+    return "TRUSTED_AGENT_MEMORY:\n" + json.dumps(mem, indent=2)[:24000]
 
 
 def decide_next(
@@ -343,7 +370,11 @@ def decide_next(
     memory = _memory_block(
         state, snapshot, src_root=src_root, repo_root=repo_root
     )
-    forum = _format_forum_context(snapshot, agent_user_id=state.agent_user_id)
+    forum = _format_forum_context(
+        snapshot,
+        agent_user_id=state.agent_user_id,
+        offer_entry_id=state.hw4.offer_entry_id,
+    )
     user = (
         "Wake-up: decide the single most useful next Canvas write (or abstain).\n"
         "Use TRUSTED_AGENT_MEMORY for what you already did; use the untrusted forum "

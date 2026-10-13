@@ -36,6 +36,9 @@ Host constraints (enforced outside you):
 - If waiting on a provider with no new result AND no unanswered request under your
   own offer, abstain. An unanswered peer request under your offer is a serve—do that
   instead of waiting (SERVE beats WAIT).
+- TRUSTED_AGENT_MEMORY.pending_incoming_under_offer[].message is the full host-extracted
+  peer request (not a truncated forum skim). Serve from that text; do not ask for
+  clarification just because the untrusted forum dump looks cut off.
 - Keep request/result/checks/corrections in the same offer thread when delegating.
 - Do not edit or delete anyone's posts; only propose new entry/reply text.
 - Human course questions belong on Piazza — never draft Piazza content.

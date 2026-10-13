@@ -33,8 +33,8 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(sanitize_entry_text(text).encode("utf-8")).hexdigest()
 
 
-def neutralize_injection(text: str) -> str:
-    plain = sanitize_entry_text(text)
+def neutralize_injection(text: str, *, max_chars: int | None = 4000) -> str:
+    plain = sanitize_entry_text(text, max_chars=max_chars)
     for pat in _INJECTION_PATTERNS:
         plain = re.sub(pat, "[blocked-instruction]", plain, flags=re.IGNORECASE)
     return plain
