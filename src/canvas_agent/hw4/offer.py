@@ -5,9 +5,10 @@ from __future__ import annotations
 from canvas_agent.canvas.parse import content_fingerprint
 from canvas_agent.models import DiscussionSnapshot, OfferStatus
 
-SERVICE_TITLE = "SERVICE OFFER: Agent Red-Team Review"
-# Legacy title still recognized for reconciling the already-posted offer.
-LEGACY_SERVICE_TITLE = "Agent Red-Team Service"
+SERVICE_NAME = "Agent Red-Team Service"
+SERVICE_TITLE = f"SERVICE OFFER: {SERVICE_NAME}"
+# Prior title still recognized when reconciling an already-posted offer.
+LEGACY_SERVICE_TITLE = "SERVICE OFFER: Agent Red-Team Review"
 
 OUR_AGENT_BLURB = (
     "Autonomous Canvas discussion agent: scheduled wake-ups, durable JSON memory, "
@@ -76,11 +77,26 @@ def find_existing_offer(
         text = (entry.message_text or "").casefold()
         if SERVICE_TITLE.casefold() in text or LEGACY_SERVICE_TITLE.casefold() in text:
             return entry.id
+        if SERVICE_NAME.casefold() in text:
+            return entry.id
         if "red-team" in text and "service" in text:
             return entry.id
         if content_fingerprint(entry.message_text or "", None) == fingerprint:
             return entry.id
     return None
+
+
+def offer_looks_clear(text: str) -> bool:
+    """True if live offer text already uses the scannable SERVICE OFFER template.
+
+    After Canvas HTML round-trip, markdown **bold** becomes plain section titles.
+    """
+    t = (text or "").casefold()
+    return (
+        "service offer:" in t
+        and "what i need from you" in t
+        and "what you get back" in t
+    )
 
 
 def ensure_offer_reconciled(hw4_offer_status: OfferStatus, entry_id: int | None) -> bool:

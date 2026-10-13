@@ -15,7 +15,7 @@ from canvas_agent.canvas import endpoints
 from canvas_agent.canvas.parse import (
     html_to_text,
     parse_control_status,
-    plain_text_to_canvas_html,
+    to_canvas_html,
 )
 from canvas_agent.models import DiscussionEntry, DiscussionSnapshot
 from canvas_agent.safety.boundaries import (
@@ -270,12 +270,14 @@ class CanvasClient:
                     created_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
                 except ValueError:
                     created_at = None
+            raw_html = node.get("message") or ""
             flat.append(
                 DiscussionEntry(
                     id=entry_id,
                     user_id=node.get("user_id"),
                     parent_id=node.get("parent_id", parent_id),
-                    message_text=html_to_text(node.get("message") or ""),
+                    message_text=html_to_text(raw_html),
+                    message_html=raw_html if isinstance(raw_html, str) else "",
                     created_at=created_at,
                 )
             )
@@ -290,7 +292,7 @@ class CanvasClient:
         response = self._request(
             "POST",
             endpoints.discussion_entries(self.course_id, self.topic_id),
-            data={"message": plain_text_to_canvas_html(message)},
+            data={"message": to_canvas_html(message)},
             allow_retry=False,
         )
         try:
@@ -306,7 +308,7 @@ class CanvasClient:
         response = self._request(
             "POST",
             endpoints.discussion_replies(self.course_id, self.topic_id, entry_id),
-            data={"message": plain_text_to_canvas_html(message)},
+            data={"message": to_canvas_html(message)},
             allow_retry=False,
         )
         try:

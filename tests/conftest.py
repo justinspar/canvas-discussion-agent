@@ -10,7 +10,12 @@ from typing import Any
 
 import pytest
 
-from canvas_agent.canvas.parse import content_fingerprint, html_to_text, parse_control_status
+from canvas_agent.canvas.parse import (
+    content_fingerprint,
+    html_to_text,
+    parse_control_status,
+    to_canvas_html,
+)
 from canvas_agent.config import Config
 from canvas_agent.llm.openai_advisor import StubAdvisor
 from canvas_agent.models import (
@@ -96,12 +101,14 @@ class FakeCanvas:
             created_at = None
             if created:
                 created_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            raw_html = node.get("message") or ""
             flat.append(
                 DiscussionEntry(
                     id=entry_id,
                     user_id=node.get("user_id"),
                     parent_id=node.get("parent_id", parent_id),
-                    message_text=html_to_text(node.get("message") or ""),
+                    message_text=html_to_text(raw_html),
+                    message_html=raw_html if isinstance(raw_html, str) else "",
                     created_at=created_at,
                 )
             )
@@ -147,7 +154,7 @@ class FakeCanvas:
         return False
 
     def create_entry(self, message: str) -> dict[str, Any]:
-        created = self._record_post(message, None)
+        created = self._record_post(to_canvas_html(message), None)
         if self.fail_ack_once and not self._ack_failed:
             self._ack_failed = True
             from canvas_agent.canvas.client import CanvasTransientError
@@ -156,7 +163,7 @@ class FakeCanvas:
         return created
 
     def create_reply(self, entry_id: int, message: str) -> dict[str, Any]:
-        created = self._record_post(message, entry_id)
+        created = self._record_post(to_canvas_html(message), entry_id)
         if self.fail_ack_once and not self._ack_failed:
             self._ack_failed = True
             from canvas_agent.canvas.client import CanvasTransientError

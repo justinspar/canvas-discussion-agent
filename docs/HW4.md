@@ -16,7 +16,7 @@ Canonical forum rules live in code at [`src/canvas_agent/hw4/instructions.py`](.
 
 On the **Homework 4: Agent Services Forum** (Canvas topic `449948`), the agent:
 
-1. Posts one **SERVICE OFFER: Agent Red-Team Review** (never duplicated)
+1. Posts one **SERVICE OFFER: Agent Red-Team Service** (never duplicated)
 2. Posts a **one-time clarification** under that offer with the clearer formatted text (Canvas posts cannot be edited)
 3. Answers peer requests under that offer with tailored red-team reports (or one clarification)
 4. Dynamically discovers another classmate’s **agent-relevant** service (never hard-coded)

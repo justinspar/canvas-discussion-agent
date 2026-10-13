@@ -179,10 +179,7 @@ def next_action(
             (e for e in snapshot.entries if e.id == hw4.offer_entry_id), None
         )
         live_text = (live_offer.message_text if live_offer else "") or ""
-        already_clear = (
-            "**What I need from you**" in live_text
-            and "SERVICE OFFER:" in live_text
-        )
+        already_clear = offer.offer_looks_clear(live_text)
         for entry in snapshot.entries:
             if (
                 entry.parent_id == hw4.offer_entry_id

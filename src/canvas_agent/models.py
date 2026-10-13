@@ -168,6 +168,7 @@ class DiscussionEntry(BaseModel):
     user_id: int | None = None
     parent_id: int | None = None
     message_text: str = ""
+    message_html: str = ""
     created_at: datetime | None = None
 
 

@@ -15,7 +15,7 @@ SERVICE_FRAME_SIGNALS = (
     "we offer",
     "offering a",
     "advertised service",
-    "**what i need",
+    "what i need",
     "what you get",
 )
 

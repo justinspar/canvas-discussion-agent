@@ -72,14 +72,15 @@ def test_system_prompt_requires_piazza_for_human_questions() -> None:
     assert "edit or delete" in SYSTEM_PROMPT.casefold()
 
 
-def test_output_guard_strips_html() -> None:
+def test_output_guard_strips_unsafe_html_keeps_safe() -> None:
     decision = validate_decision(
         AdvisorDecision(
             action="post",
             kind=WriteKind.ENTRY,
-            message="<script>alert(1)</script>Useful point about sampling.",
+            message="<script>alert(1)</script><p>Useful point about sampling.</p>",
         )
     )
     assert decision.message is not None
     assert "<script>" not in decision.message
     assert "Useful point" in decision.message
+    assert "<p>" in decision.message

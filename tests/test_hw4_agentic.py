@@ -50,7 +50,7 @@ def test_agentic_posts_offer_when_needed() -> None:
         "intent": "offer",
         "kind": "entry",
         "parent_id": None,
-        "message": "SERVICE OFFER: Agent Red-Team Review\nI review agents.",
+        "message": "SERVICE OFFER: Agent Red-Team Service\nI review agents.",
         "rationale": "need to advertise service",
         "meta": {},
     }
@@ -98,7 +98,7 @@ def test_agentic_abstain() -> None:
                 id=10,
                 user_id=100,
                 parent_id=None,
-                message_text="SERVICE OFFER: Agent Red-Team Review\n**What I need from you**",
+                message_text="SERVICE OFFER: Agent Red-Team Service\n**What I need from you**",
             )
         ),
         llm_client=client,
@@ -115,13 +115,10 @@ def test_agentic_delegate_sets_provider_meta() -> None:
         "kind": "reply",
         "parent_id": 55,
         "message": (
-            "Service request\nYou offered: pytest for agents\n"
-            "Please design edge-case tests for:\n"
-            "```python\n"
-            "def add(a, b):\n"
-            "    return a + b\n"
-            "```\n"
-            "Deadline: soon"
+            "<p>Service request — you offered pytest for agents.</p>"
+            "<p>Please design edge-case tests for:</p>"
+            "<pre><code>def add(a, b):\n    return a + b\n</code></pre>"
+            "<p>Deadline: soon</p>"
         ),
         "rationale": "hire testing peer",
         "meta": {
@@ -148,7 +145,7 @@ def test_agentic_delegate_sets_provider_meta() -> None:
                 id=10,
                 user_id=100,
                 parent_id=None,
-                message_text="SERVICE OFFER: Agent Red-Team Review\n**What I need from you**",
+                message_text="SERVICE OFFER: Agent Red-Team Service\n**What I need from you**",
             ),
             DiscussionEntry(
                 id=55,

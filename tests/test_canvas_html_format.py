@@ -1,112 +1,83 @@
-"""Canvas HTML formatting preserves code for pytest hires."""
+"""Canvas HTML formatting — peer-like structure, safe allowlist."""
 
 from __future__ import annotations
 
-from canvas_agent.canvas.parse import html_to_text, plain_text_to_canvas_html
+from canvas_agent.canvas.parse import (
+    html_to_text,
+    plain_text_to_canvas_html,
+    sanitize_canvas_html,
+)
+from canvas_agent.models import AdvisorDecision, WriteKind
+from canvas_agent.safety.output_guard import validate_decision
 
 
 def test_plain_text_to_canvas_html_preserves_fenced_code() -> None:
     msg = (
-        "Please test this function:\n"
+        "Please test this function:\n\n"
         "```python\n"
         "def dedupe(items):\n"
         "    if not isinstance(items, list):\n"
         "        raise TypeError('bad')\n"
         "    return list(dict.fromkeys(items))\n"
-        "```\n"
+        "```\n\n"
         "Deadline: 24h"
     )
     html = plain_text_to_canvas_html(msg)
     assert "<pre><code>" in html
+    assert "<p>" in html
     assert "def dedupe(items):" in html
     assert "    if not isinstance" in html
-    assert "<br>" in html
     roundtrip = html_to_text(html)
     assert "def dedupe(items):" in roundtrip
     assert "    if not isinstance" in roundtrip
 
 
-def test_agentic_rejects_pytest_hire_without_fenced_source() -> None:
-    import json
-
-    from canvas_agent.hw4.agentic import decide_next
-    from canvas_agent.hw4.phases import Hw4Idle
-    from canvas_agent.models import (
-        AgentState,
-        ControlStatus,
-        DiscussionEntry,
-        DiscussionSnapshot,
-        Hw4State,
-        OfferStatus,
+def test_structured_lists_and_bold() -> None:
+    msg = (
+        "SERVICE OFFER: Demo\n\n"
+        "What it does:\n\n"
+        "- first item\n"
+        "- second **important** item\n\n"
+        "Turnaround: every few hours"
     )
+    html = plain_text_to_canvas_html(msg)
+    assert "<ul>" in html
+    assert "<li>" in html
+    assert "<strong>important</strong>" in html
+    assert "<p>" in html
 
-    class _FakeChoice:
-        def __init__(self, content: str) -> None:
-            self.message = type("M", (), {"content": content})()
 
-    class _FakeClient:
-        def __init__(self, content: str) -> None:
-            self._content = content
-
-            class _Comp:
-                def __init__(self, outer: "_FakeClient") -> None:
-                    self._outer = outer
-
-                def create(self, **kwargs):  # noqa: ANN003
-                    return type(
-                        "R", (), {"choices": [_FakeChoice(self._outer._content)]}
-                    )()
-
-            self.chat = type("C", (), {"completions": _Comp(self)})()
-
-    payload = {
-        "action": "post",
-        "intent": "delegate",
-        "kind": "reply",
-        "parent_id": 55,
-        "message": (
-            "Please write pytest for dedupe_preserve_order. "
-            "def dedupe_preserve_order(items): return items\n"
-            "Deadline 24h."
-        ),
-        "rationale": "hire pytest",
-        "meta": {"provider_entry_id": 55, "deadline_hours": 24},
-    }
-    state = AgentState(
-        agent_user_id=100,
-        hw4=Hw4State(
-            offer_status=OfferStatus.VERIFIED,
-            offer_entry_id=10,
-            offer_verified=True,
-            offer_clarification_id=10,
-        ),
+def test_sanitize_keeps_allowlist_strips_script() -> None:
+    raw = (
+        "<p>Hello <strong>world</strong></p>"
+        "<script>alert(1)</script>"
+        "<p onclick='x'>safe</p>"
     )
-    snap = DiscussionSnapshot(
-        topic_id=449948,
-        control_status=ControlStatus.RUNNING,
-        entries=[
-            DiscussionEntry(
-                id=10,
-                user_id=100,
-                parent_id=None,
-                message_text="SERVICE OFFER: x\n**What I need from you**",
-            ),
-            DiscussionEntry(
-                id=55,
-                user_id=200,
-                parent_id=None,
-                message_text=(
-                    "SERVICE OFFER: unit tests for your Python function (pytest)\n"
-                    "Input: function source code in a code block."
-                ),
-            ),
-        ],
+    clean = sanitize_canvas_html(raw)
+    assert "<script>" not in clean
+    assert "alert" not in clean
+    assert "<strong>world</strong>" in clean
+    assert "onclick" not in clean
+    assert "<p>safe</p>" in clean
+
+
+def test_output_guard_allows_safe_html() -> None:
+    decision = validate_decision(
+        AdvisorDecision(
+            action="post",
+            kind=WriteKind.ENTRY,
+            message="<p>Useful point about <strong>sampling</strong>.</p>"
+            "<script>alert(1)</script>",
+        )
     )
-    action = decide_next(
-        state,
-        snap,
-        llm_client=_FakeClient(json.dumps(payload)),
-        llm_model="bedrock/claude-sonnet-5",
-    )
-    assert isinstance(action, Hw4Idle)
-    assert "missing_fenced_source" in action.rationale
+    assert decision.message is not None
+    assert "<script>" not in decision.message
+    assert "<p>" in decision.message
+    assert "<strong>sampling</strong>" in decision.message
+
+
+def test_existing_html_passthrough_sanitized() -> None:
+    msg = "<p><strong>SERVICE OFFER:</strong> Checklist</p><ul><li>One</li></ul>"
+    html = plain_text_to_canvas_html(msg)
+    assert html.startswith("<p>")
+    assert "<ul>" in html

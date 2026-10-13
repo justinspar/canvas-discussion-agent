@@ -114,7 +114,7 @@ def test_offer_posted_once_and_duplicate_prevented(hw4_config, tmp_storage) -> N
     assert first.hw4_phase == "offer_service"
     assert first.kind is WriteKind.ENTRY
     assert SERVICE_TITLE in (canvas.posts[0]["message"] or "")
-    assert "**What I need from you**" in (canvas.posts[0]["message"] or "")
+    assert "<strong>What I need from you</strong>" in (canvas.posts[0]["message"] or "")
     state = tmp_storage.load()
     assert state.hw4.offer_status is OfferStatus.VERIFIED
     assert state.hw4.offer_entry_id is not None

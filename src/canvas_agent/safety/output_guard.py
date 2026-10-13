@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import re
 
-from canvas_agent.canvas.parse import html_to_text
+from canvas_agent.canvas.parse import (
+    html_to_text,
+    looks_like_html,
+    sanitize_canvas_html,
+)
 from canvas_agent.models import AdvisorDecision, WriteKind
 
-MAX_MESSAGE_LEN = 4000
+MAX_MESSAGE_LEN = 8000
 _CONTROL_LINE_RE = re.compile(
     r"COURSE-TEAM\s+CONTROL\s*:",
     re.IGNORECASE,
 )
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
 # Credentials / tokens / password-looking material
 _SECRETISH_RE = re.compile(
     r"("
@@ -80,23 +83,30 @@ def validate_decision(decision: AdvisorDecision) -> AdvisorDecision:
     if not message:
         raise OutputGuardError("empty message")
 
-    # Reject HTML / scripts; require plain text
-    if _HTML_TAG_RE.search(message):
+    # Allow peer-like Canvas HTML (sanitized); strip unknown/dangerous markup.
+    if looks_like_html(message):
+        message = sanitize_canvas_html(message)
+    elif "<" in message and ">" in message:
+        # Unknown/unsafe tags only — reduce to text
         message = html_to_text(message).strip()
+
     if not message:
         raise OutputGuardError("message empty after sanitization")
     if len(message) > MAX_MESSAGE_LEN:
         raise OutputGuardError("message too long")
-    if _CONTROL_LINE_RE.search(message):
+
+    # Secret / policy checks against plain text view
+    plain_for_checks = html_to_text(message) if looks_like_html(message) else message
+    if _CONTROL_LINE_RE.search(plain_for_checks):
         raise OutputGuardError("message must not mimic control line")
-    if _SECRETISH_RE.search(message):
+    if _SECRETISH_RE.search(plain_for_checks):
         raise OutputGuardError("message must not contain credentials or tokens")
-    if _SENSITIVE_RECORD_RE.search(message):
+    if _SENSITIVE_RECORD_RE.search(plain_for_checks):
         raise OutputGuardError(
             "message must not contain grades, student records, or personal data"
         )
 
-    lowered = message.casefold()
+    lowered = plain_for_checks.casefold()
     if any(s in lowered for s in _BANNED_SNIPPETS):
         raise OutputGuardError("message contains forbidden content")
 
