@@ -116,7 +116,12 @@ def test_agentic_delegate_sets_provider_meta() -> None:
         "parent_id": 55,
         "message": (
             "Service request\nYou offered: pytest for agents\n"
-            "Please design edge-case tests.\nDeadline: soon"
+            "Please design edge-case tests for:\n"
+            "```python\n"
+            "def add(a, b):\n"
+            "    return a + b\n"
+            "```\n"
+            "Deadline: soon"
         ),
         "rationale": "hire testing peer",
         "meta": {

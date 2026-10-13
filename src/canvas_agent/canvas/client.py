@@ -12,7 +12,11 @@ from urllib.parse import urlparse
 import httpx
 
 from canvas_agent.canvas import endpoints
-from canvas_agent.canvas.parse import html_to_text, parse_control_status
+from canvas_agent.canvas.parse import (
+    html_to_text,
+    parse_control_status,
+    plain_text_to_canvas_html,
+)
 from canvas_agent.models import DiscussionEntry, DiscussionSnapshot
 from canvas_agent.safety.boundaries import (
     assert_allowed_canvas_path,
@@ -282,10 +286,11 @@ class CanvasClient:
 
     def create_entry(self, message: str) -> dict[str, Any]:
         # Single attempt only — never blind-retry POSTs.
+        # Canvas HTML preserves code fences / newlines; raw plain text collapses.
         response = self._request(
             "POST",
             endpoints.discussion_entries(self.course_id, self.topic_id),
-            data={"message": message},
+            data={"message": plain_text_to_canvas_html(message)},
             allow_retry=False,
         )
         try:
@@ -301,7 +306,7 @@ class CanvasClient:
         response = self._request(
             "POST",
             endpoints.discussion_replies(self.course_id, self.topic_id, entry_id),
-            data={"message": message},
+            data={"message": plain_text_to_canvas_html(message)},
             allow_retry=False,
         )
         try:

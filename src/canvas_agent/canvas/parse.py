@@ -19,16 +19,22 @@ class _HTMLTextExtractor(HTMLParser):
         super().__init__(convert_charrefs=True)
         self._chunks: list[str] = []
         self._skip = False
+        self._pre = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in {"script", "style"}:
             self._skip = True
+        if tag in {"pre", "code"}:
+            self._pre = True
         if tag in {"br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4"}:
             self._chunks.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
         if tag in {"script", "style"}:
             self._skip = False
+        if tag in {"pre", "code"}:
+            self._pre = False
+            self._chunks.append("\n")
         if tag in {"p", "div", "li", "tr"}:
             self._chunks.append("\n")
 
@@ -51,9 +57,39 @@ def html_to_text(raw: str | None) -> str:
     except Exception:
         text = re.sub(r"<[^>]+>", " ", raw)
     text = html.unescape(text)
-    # Normalize newlines then trim each line
-    lines = [line.strip() for line in text.replace("\r\n", "\n").split("\n")]
-    return "\n".join(line for line in lines if line).strip()
+    # Keep indentation (needed for code); trim trailing spaces only.
+    lines = [line.rstrip() for line in text.replace("\r\n", "\n").split("\n")]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
+
+
+_FENCE_RE = re.compile(r"```(?:([A-Za-z0-9_+-]+)\n)?(.*?)```", re.DOTALL)
+
+
+def plain_text_to_canvas_html(message: str) -> str:
+    """
+    Convert agent plain text to Canvas HTML that preserves newlines and code fences.
+    Plain POSTs otherwise collapse indentation (breaking pytest source blocks).
+    """
+    text = (message or "").replace("\r\n", "\n")
+    parts: list[str] = []
+    pos = 0
+    for match in _FENCE_RE.finditer(text):
+        before = text[pos : match.start()]
+        if before:
+            parts.append(
+                html.escape(before).replace("\n", "<br>\n")
+            )
+        code = html.escape(match.group(2) or "")
+        parts.append(f"<pre><code>{code}</code></pre>\n")
+        pos = match.end()
+    tail = text[pos:]
+    if tail:
+        parts.append(html.escape(tail).replace("\n", "<br>\n"))
+    return "".join(parts) if parts else html.escape(text).replace("\n", "<br>\n")
 
 
 def first_nonempty_line(text: str) -> str:
