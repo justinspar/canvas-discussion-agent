@@ -75,10 +75,13 @@ Full-credit playbook (prioritize these outcomes across wake-ups):
 4) VERIFY & USE — When a provider returns work, independently check it; if good,
    incorporate and acknowledge (optional tip 0–5 with amount + request id +
    what was useful). If bad, one correction request then stop looping.
-5) WAIT — If you already hired and the deadline has not passed with no new
-   result, abstain. Do not spam.
+5) WAIT — Abstain for hire-wait only if (a) there is no unanswered peer request
+   under your own offer and (b) there is no new provider result to verify/ack.
+   Do not spam the provider thread.
 6) FALLBACK — If no suitable peer exists after honest search, document the
    attempt briefly rather than hiring nonsense.
+Hard rule: SERVE always beats WAIT on the same wake-up (one write). An open hire
+does not pause serving peers who asked under your offer.
 One useful write per wake-up beats many weak ones. Prefer quality and thread
 discipline over volume.
 """

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 
-from canvas_agent.hw4.agentic import decide_next
+from canvas_agent.hw4.agentic import AGENTIC_SYSTEM, _memory_block, decide_next
+from canvas_agent.hw4.instructions import HW4_FULL_CREDIT_PLAYBOOK
 from canvas_agent.hw4.phases import Hw4Idle, Hw4PlannedWrite
+from canvas_agent.llm.prompts import SYSTEM_PROMPT
 from canvas_agent.models import (
     AgentState,
     ControlStatus,
@@ -161,3 +163,66 @@ def test_agentic_delegate_sets_provider_meta() -> None:
     assert action.parent_id == 55
     assert action.meta.get("type") == "delegate"
     assert action.meta.get("deadline") is not None
+
+
+def test_playbook_serve_beats_wait() -> None:
+    assert "SERVE always beats WAIT" in HW4_FULL_CREDIT_PLAYBOOK
+    assert "SERVE beats WAIT" in AGENTIC_SYSTEM
+    assert "SERVE beats WAIT" in SYSTEM_PROMPT
+
+
+def test_memory_surfaces_pending_incoming_under_offer() -> None:
+    state = AgentState(
+        agent_user_id=100,
+        hw4=Hw4State(
+            offer_status=OfferStatus.VERIFIED,
+            offer_entry_id=10,
+            offer_verified=True,
+        ),
+    )
+    snap = _snap(
+        DiscussionEntry(
+            id=10,
+            user_id=100,
+            parent_id=None,
+            message_text="SERVICE OFFER: Agent Red-Team Service\nWhat I need from you",
+        ),
+        DiscussionEntry(
+            id=77,
+            user_id=200,
+            parent_id=10,
+            message_text=(
+                "Please red-team my Canvas agent. Purpose: forum bot. "
+                "Tools: Canvas API. Memory: JSON state. Constraints: control line."
+            ),
+        ),
+    )
+    block = _memory_block(state, snap, src_root=None, repo_root=None)
+    assert block.startswith("TRUSTED_AGENT_MEMORY:")
+    mem = json.loads(block.split("TRUSTED_AGENT_MEMORY:\n", 1)[1])
+    assert mem["goals_remaining"]["need_serve"] is True
+    assert mem["pending_incoming_under_offer"]
+    assert mem["pending_incoming_under_offer"][0]["entry_id"] == 77
+
+
+def test_memory_need_serve_false_when_no_incoming() -> None:
+    state = AgentState(
+        agent_user_id=100,
+        hw4=Hw4State(
+            offer_status=OfferStatus.VERIFIED,
+            offer_entry_id=10,
+            offer_verified=True,
+        ),
+    )
+    snap = _snap(
+        DiscussionEntry(
+            id=10,
+            user_id=100,
+            parent_id=None,
+            message_text="SERVICE OFFER: Agent Red-Team Service",
+        ),
+    )
+    block = _memory_block(state, snap, src_root=None, repo_root=None)
+    mem = json.loads(block.split("TRUSTED_AGENT_MEMORY:\n", 1)[1])
+    assert mem["goals_remaining"]["need_serve"] is False
+    assert mem["pending_incoming_under_offer"] == []

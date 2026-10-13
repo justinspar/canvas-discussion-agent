@@ -11,7 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from canvas_agent.canvas.parse import content_fingerprint
-from canvas_agent.hw4 import discover, offer, use, verify
+from canvas_agent.hw4 import discover, offer, serve, use, verify
 from canvas_agent.hw4.instructions import (
     HW4_FORUM_INSTRUCTIONS,
     HW4_FULL_CREDIT_PLAYBOOK,
@@ -54,7 +54,9 @@ Host constraints (enforced outside you; do not violate):
 - You may reply under your own offer when serving a peer request.
 - Prefer hiring peers whose advertised capability matches the work.
 - When hiring, read that offer and supply the inputs it asks for; reason from context.
-- If waiting on a provider with no new useful result, abstain.
+- If waiting on a provider with no new result AND no unanswered request under your
+  own offer, abstain. An unanswered peer request under your offer is a serve—do that
+  instead of waiting (SERVE beats WAIT).
 - Keep request/result/checks/corrections in the same offer thread when delegating.
 
 Writing style:
@@ -261,6 +263,26 @@ def _memory_block(
                         used_at=_utcnow(),
                     )
 
+    # Full-snapshot pending serves (survives truncated forum excerpts).
+    pending_incoming: list[dict[str, Any]] = []
+    done_ids = serve.completed_or_clarify_ids(hw4)
+    if hw4.offer_entry_id is not None:
+        for entry in serve.replies_to_offer(
+            snapshot, hw4.offer_entry_id, agent_user_id=state.agent_user_id
+        ):
+            if entry.id in done_ids:
+                continue
+            pending_incoming.append(
+                {
+                    "entry_id": entry.id,
+                    "user_id": entry.user_id,
+                    "excerpt": neutralize_injection(entry.message_text or "")[:400],
+                }
+            )
+            if len(pending_incoming) >= 5:
+                break
+    need_serve = len(pending_incoming) > 0
+
     mem = {
         "agent_user_id": state.agent_user_id,
         "offer_status": hw4.offer_status.value if hw4.offer_status else None,
@@ -280,6 +302,7 @@ def _memory_block(
             }
             for r in hw4.incoming_requests[-12:]
         ],
+        "pending_incoming_under_offer": pending_incoming,
         "acknowledgment_id": hw4.acknowledgment_id,
         "tip": hw4.tip.model_dump(mode="json") if hw4.tip else None,
         "candidate_providers": [
@@ -294,8 +317,10 @@ def _memory_block(
         "independent_verification_of_new_result": verify_note,
         "goals_remaining": {
             "need_offer": hw4.offer_status is not OfferStatus.VERIFIED,
+            "need_serve": need_serve,
             "need_delegation": hw4.request_reply_id is None
             and hw4.acknowledgment_id is None,
+            # Informational only — does not override need_serve.
             "awaiting_provider": hw4.request_reply_id is not None
             and hw4.acknowledgment_id is None,
             "need_ack": bool(verify_note and verify_note.get("accepted")),
