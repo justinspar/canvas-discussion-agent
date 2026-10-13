@@ -17,7 +17,11 @@ from canvas_agent.hw4.instructions import (
     HW4_FULL_CREDIT_PLAYBOOK,
 )
 from canvas_agent.hw4.phases import Hw4Idle, Hw4PlannedWrite
-from canvas_agent.hw4.sanitize_peer import neutralize_injection, pick_provider_result
+from canvas_agent.hw4.sanitize_peer import (
+    is_plausible_provider_result,
+    neutralize_injection,
+    pick_provider_result,
+)
 from canvas_agent.models import (
     AcceptedWorkRecord,
     AgentState,
@@ -335,6 +339,9 @@ def _memory_block(
         ],
         "pending_incoming_under_offer": pending_incoming,
         "acknowledgment_id": hw4.acknowledgment_id,
+        "accepted_work_result_entry_id": (
+            hw4.accepted_work.result_entry_id if hw4.accepted_work else None
+        ),
         "tip": hw4.tip.model_dump(mode="json") if hw4.tip else None,
         "candidate_providers": [
             {
@@ -353,11 +360,80 @@ def _memory_block(
             and hw4.acknowledgment_id is None,
             # Informational only — does not override need_serve.
             "awaiting_provider": hw4.request_reply_id is not None
-            and hw4.acknowledgment_id is None,
-            "need_ack": bool(verify_note and verify_note.get("accepted")),
+            and hw4.acknowledgment_id is None
+            and hw4.accepted_work is None,
+            # Persist across wake-ups until a correct ack is posted.
+            "need_ack": hw4.acknowledgment_id is None
+            and (
+                hw4.accepted_work is not None
+                or bool(verify_note and verify_note.get("accepted"))
+            ),
         },
     }
     return "TRUSTED_AGENT_MEMORY:\n" + json.dumps(mem, indent=2)[:24000]
+
+
+def _gate_ack_result(
+    state: AgentState,
+    snapshot: DiscussionSnapshot,
+    meta: dict[str, Any],
+    *,
+    src_root: Path | None,
+    repo_root: Path | None,
+) -> Hw4Idle | None:
+    """Host-validate ack target. Return idle on rejection; None if ack may proceed."""
+    hw4 = state.hw4
+    # Prefer durable accepted work over whatever Parley cited.
+    if hw4.accepted_work is not None:
+        meta["result_entry_id"] = hw4.accepted_work.result_entry_id
+
+    raw_id = meta.get("result_entry_id")
+    if raw_id is None:
+        return Hw4Idle(phase="agentic", rationale="ack_missing_result_entry_id")
+    try:
+        rid = int(raw_id)
+    except (TypeError, ValueError):
+        return Hw4Idle(phase="agentic", rationale="ack_bad_result_entry_id")
+    meta["result_entry_id"] = rid
+
+    entry = next((e for e in snapshot.entries if e.id == rid), None)
+    if entry is None:
+        return Hw4Idle(phase="agentic", rationale="ack_result_not_in_snapshot")
+
+    provider_user_id = hw4.selected_provider_user_id
+    if provider_user_id is None and hw4.selected_provider_entry_id is not None:
+        offer_entry = next(
+            (e for e in snapshot.entries if e.id == hw4.selected_provider_entry_id),
+            None,
+        )
+        if offer_entry is not None:
+            provider_user_id = offer_entry.user_id
+
+    if not is_plausible_provider_result(entry, provider_user_id=provider_user_id):
+        return Hw4Idle(
+            phase="agentic", rationale="ack_rejected_not_provider_result"
+        )
+
+    if hw4.accepted_work is None or hw4.accepted_work.result_entry_id != rid:
+        outcome = verify.verify_provider_result(
+            entry.message_text or "", src_root=src_root
+        )
+        if not outcome.accepted:
+            return Hw4Idle(
+                phase="agentic",
+                rationale=f"ack_rejected_unverified:{outcome.outcome}",
+            )
+        path = use.apply_accepted_tests(outcome, repo_root=repo_root)
+        hw4.accepted_work = AcceptedWorkRecord(
+            result_entry_id=rid,
+            incorporated_path=path or "",
+            reason=outcome.outcome,
+            used_at=_utcnow(),
+        )
+
+    if rid not in hw4.provider_results_seen:
+        hw4.provider_results_seen.append(rid)
+    return None
 
 
 def decide_next(
@@ -521,11 +597,16 @@ def decide_next(
         else:
             meta["tip_amount"] = 0
         meta["useful_summary"] = rationale[:200]
-        # Mark result seen
-        if meta.get("result_entry_id") is not None:
-            rid = int(meta["result_entry_id"])
-            if rid not in state.hw4.provider_results_seen:
-                state.hw4.provider_results_seen.append(rid)
+
+        gated = _gate_ack_result(
+            state,
+            snapshot,
+            meta,
+            src_root=src_root,
+            repo_root=repo_root,
+        )
+        if gated is not None:
+            return gated
     else:
         meta["type"] = "other"
 

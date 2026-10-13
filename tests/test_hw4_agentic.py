@@ -9,8 +9,10 @@ from canvas_agent.hw4.instructions import HW4_FULL_CREDIT_PLAYBOOK
 from canvas_agent.hw4.phases import Hw4Idle, Hw4PlannedWrite
 from canvas_agent.llm.prompts import SYSTEM_PROMPT
 from canvas_agent.models import (
+    AcceptedWorkRecord,
     AgentState,
     ControlStatus,
+    DelegationStatus,
     DiscussionEntry,
     DiscussionSnapshot,
     Hw4State,
@@ -287,3 +289,188 @@ def test_memory_need_serve_false_when_no_incoming() -> None:
     mem = json.loads(block.split("TRUSTED_AGENT_MEMORY:\n", 1)[1])
     assert mem["goals_remaining"]["need_serve"] is False
     assert mem["pending_incoming_under_offer"] == []
+
+
+def test_memory_need_ack_persists_with_accepted_work() -> None:
+    """need_ack stays true across wake-ups until acknowledgment_id is set."""
+    state = AgentState(
+        agent_user_id=100,
+        hw4=Hw4State(
+            offer_status=OfferStatus.VERIFIED,
+            offer_entry_id=10,
+            offer_verified=True,
+            selected_provider_entry_id=50,
+            selected_provider_user_id=300,
+            request_reply_id=60,
+            delegation_status=DelegationStatus.AWAITING,
+            accepted_work=AcceptedWorkRecord(
+                result_entry_id=80,
+                reason="accepted",
+            ),
+            provider_results_seen=[80],
+            acknowledgment_id=None,
+        ),
+    )
+    snap = _snap(
+        DiscussionEntry(
+            id=10,
+            user_id=100,
+            parent_id=None,
+            message_text="SERVICE OFFER: Agent Red-Team Service",
+        ),
+        DiscussionEntry(
+            id=50, user_id=300, parent_id=None, message_text="SERVICE OFFER: Audit"
+        ),
+        DiscussionEntry(
+            id=60, user_id=100, parent_id=50, message_text="You offered: Audit"
+        ),
+        DiscussionEntry(
+            id=80,
+            user_id=300,
+            parent_id=50,
+            message_text=(
+                "Scope tier: autonomous loop. Finding: idempotency gap. "
+                "Control line and untrusted peer text. Overall risk MEDIUM."
+            ),
+        ),
+    )
+    block = _memory_block(state, snap, src_root=None, repo_root=None)
+    mem = json.loads(block.split("TRUSTED_AGENT_MEMORY:\n", 1)[1])
+    assert mem["accepted_work_result_entry_id"] == 80
+    assert mem["goals_remaining"]["need_ack"] is True
+    assert mem["goals_remaining"]["awaiting_provider"] is False
+    # No new verify_note this cycle (already seen) — need_ack must still hold.
+    assert mem["independent_verification_of_new_result"] is None
+
+
+def test_agentic_rejects_ack_of_peer_hire() -> None:
+    hire_text = (
+        "Hi provider, I would like to use your Agent Build Audit because "
+        "your offer says you give a one-turn review. Deadline: 24h. "
+        "Desired result: a scope tier. How I will check: keyword scan."
+    )
+    payload = {
+        "action": "post",
+        "intent": "ack",
+        "kind": "reply",
+        "parent_id": 50,
+        "message": "Acknowledgment — thanks for entry_id=70. Tip: 4 coins.",
+        "rationale": "accept hire as deliverable (wrong)",
+        "meta": {"result_entry_id": 70, "tip_amount": 4},
+    }
+    client = _FakeClient(json.dumps(payload))
+    state = AgentState(
+        agent_user_id=100,
+        hw4=Hw4State(
+            offer_status=OfferStatus.VERIFIED,
+            offer_entry_id=10,
+            offer_verified=True,
+            selected_provider_entry_id=50,
+            selected_provider_user_id=300,
+            request_reply_id=60,
+            delegation_status=DelegationStatus.AWAITING,
+        ),
+    )
+    action = decide_next(
+        state,
+        _snap(
+            DiscussionEntry(
+                id=10,
+                user_id=100,
+                parent_id=None,
+                message_text="SERVICE OFFER: Agent Red-Team Service",
+            ),
+            DiscussionEntry(
+                id=50, user_id=300, parent_id=None, message_text="SERVICE OFFER: Audit"
+            ),
+            DiscussionEntry(
+                id=60, user_id=100, parent_id=50, message_text="You offered: Audit"
+            ),
+            DiscussionEntry(
+                id=70,
+                user_id=199930,
+                parent_id=50,
+                message_text=hire_text,
+            ),
+        ),
+        llm_client=client,
+        llm_model="bedrock/claude-sonnet-5",
+    )
+    assert isinstance(action, Hw4Idle)
+    assert action.rationale == "ack_rejected_not_provider_result"
+    # Hire may be marked seen as noise by pick_provider_result; must not be accepted.
+    assert state.hw4.accepted_work is None
+    assert state.hw4.acknowledgment_id is None
+
+
+def test_agentic_ack_binds_to_accepted_work() -> None:
+    audit = (
+        "Scope tier: autonomous loop. Finding 1: idempotency gap on retries. "
+        "Control line RUNNING check and untrusted peer text handling. "
+        "Overall risk MEDIUM. Concrete test: duplicate POST."
+    )
+    payload = {
+        "action": "post",
+        "intent": "ack",
+        "kind": "reply",
+        "parent_id": 50,
+        "message": "Acknowledgment — wrong id cited. Tip: 3 coins.",
+        "rationale": "accept work",
+        # Parley cites the wrong peer hire; host must bind to accepted_work.
+        "meta": {"result_entry_id": 70, "tip_amount": 3},
+    }
+    client = _FakeClient(json.dumps(payload))
+    state = AgentState(
+        agent_user_id=100,
+        hw4=Hw4State(
+            offer_status=OfferStatus.VERIFIED,
+            offer_entry_id=10,
+            offer_verified=True,
+            selected_provider_entry_id=50,
+            selected_provider_user_id=300,
+            request_reply_id=60,
+            delegation_status=DelegationStatus.AWAITING,
+            accepted_work=AcceptedWorkRecord(
+                result_entry_id=80,
+                reason="accepted",
+            ),
+            provider_results_seen=[80],
+        ),
+    )
+    action = decide_next(
+        state,
+        _snap(
+            DiscussionEntry(
+                id=10,
+                user_id=100,
+                parent_id=None,
+                message_text="SERVICE OFFER: Agent Red-Team Service",
+            ),
+            DiscussionEntry(
+                id=50, user_id=300, parent_id=None, message_text="SERVICE OFFER: Audit"
+            ),
+            DiscussionEntry(
+                id=60, user_id=100, parent_id=50, message_text="You offered: Audit"
+            ),
+            DiscussionEntry(
+                id=70,
+                user_id=199930,
+                parent_id=50,
+                message_text=(
+                    "I would like to use your service. Deadline: soon. "
+                    "Desired result: audit. How I will check: read reply."
+                ),
+            ),
+            DiscussionEntry(
+                id=80,
+                user_id=300,
+                parent_id=50,
+                message_text=audit,
+            ),
+        ),
+        llm_client=client,
+        llm_model="bedrock/claude-sonnet-5",
+    )
+    assert isinstance(action, Hw4PlannedWrite)
+    assert action.meta.get("type") == "ack"
+    assert action.meta.get("result_entry_id") == 80
