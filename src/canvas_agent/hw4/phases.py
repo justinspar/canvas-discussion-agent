@@ -20,6 +20,7 @@ from canvas_agent.hw4.sanitize_peer import (
     extract_agent_profile,
     has_enough_profile,
     looks_like_decline,
+    pick_provider_result,
 )
 from canvas_agent.models import (
     AcceptedWorkRecord,
@@ -341,20 +342,14 @@ def next_action(
                 rationale="rejected_unsuitable_provider",
             )
 
-        provider_id = hw4.selected_provider_entry_id
-        results = [
-            e
-            for e in snapshot.entries
-            if e.parent_id == provider_id
-            and e.id != hw4.request_reply_id
-            and e.id not in hw4.provider_results_seen
-            and (state.agent_user_id is None or e.user_id != state.agent_user_id)
-            and e.id != hw4.correction_reply_id
-            and e.id > (hw4.request_reply_id or 0)
-        ]
-        results.sort(key=lambda e: e.id)
+        result, noise_ids = pick_provider_result(
+            snapshot, hw4, agent_user_id=state.agent_user_id
+        )
+        for nid in noise_ids:
+            if nid not in hw4.provider_results_seen:
+                hw4.provider_results_seen.append(nid)
 
-        if not results:
+        if result is None:
             if (
                 hw4.request_deadline
                 and _utcnow() > hw4.request_deadline
@@ -374,7 +369,6 @@ def next_action(
                 return Hw4Idle(phase="await_result", rationale="deadline_missed")
             return Hw4Idle(phase="await_result", rationale="waiting_for_provider")
 
-        result = results[0]
         hw4.provider_results_seen.append(result.id)
 
         if looks_like_decline(result.message_text or ""):
@@ -421,7 +415,7 @@ def next_action(
             return Hw4PlannedWrite(
                 phase="use_and_ack",
                 kind=WriteKind.REPLY,
-                parent_id=provider_id,
+                parent_id=hw4.selected_provider_entry_id,
                 message=msg,
                 rationale="ack_accepted_work",
                 action_id=f"ack:{result.id}",
@@ -439,7 +433,7 @@ def next_action(
             return Hw4PlannedWrite(
                 phase="correction_request",
                 kind=WriteKind.REPLY,
-                parent_id=provider_id,
+                parent_id=hw4.selected_provider_entry_id,
                 message=use.correction_message(outcome),
                 rationale="request_correction",
                 action_id=f"correct:{result.id}:{uuid4().hex[:8]}",
@@ -512,6 +506,9 @@ def on_write_confirmed(
         provider_entry = meta.get("provider_entry_id")
         if provider_entry is not None:
             hw4.selected_provider_entry_id = int(provider_entry)
+        provider_user = meta.get("provider_user_id")
+        if provider_user is not None:
+            hw4.selected_provider_user_id = int(provider_user)
     elif kind == "correction":
         hw4.correction_request_id = planned.action_id
         hw4.correction_reply_id = canvas_entry_id

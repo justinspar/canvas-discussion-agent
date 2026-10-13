@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import re
+from typing import TYPE_CHECKING
 
 from canvas_agent.safety.sanitize import sanitize_entry_text
+
+if TYPE_CHECKING:
+    from canvas_agent.models import DiscussionEntry, DiscussionSnapshot, Hw4State
 
 _INJECTION_PATTERNS = (
     r"ignore\s+(all\s+)?previous\s+instructions",
@@ -83,6 +87,105 @@ def looks_like_decline(text: str) -> bool:
         "will not take",
     )
     return any(c in lowered for c in cues)
+
+
+def looks_like_peer_hire_request(text: str) -> bool:
+    """True if this looks like another peer hiring the same provider (not a deliverable)."""
+    lowered = neutralize_injection(text).casefold()
+    strong = (
+        "i would like to use your",
+        "i'd like to use your",
+        "i want to use your",
+        "want to use your service",
+        "you offered:",
+        "hiring your",
+        "please take this request",
+    )
+    if any(s in lowered for s in strong):
+        return True
+    # Common HW4 request shape without being a report
+    hire_bits = sum(
+        1
+        for s in (
+            "how i will check",
+            "how i will verify",
+            "desired result",
+            "acceptance criteria",
+            "deadline:",
+            "task:",
+        )
+        if s in lowered
+    )
+    deliverable_bits = sum(
+        1
+        for s in (
+            "finding",
+            "scope tier",
+            "overall risk",
+            "pass / partial",
+            "concrete test",
+            "red-team report",
+            "audit report",
+        )
+        if s in lowered
+    )
+    return hire_bits >= 2 and deliverable_bits == 0
+
+
+def is_plausible_provider_result(
+    entry: DiscussionEntry,
+    *,
+    provider_user_id: int | None,
+) -> bool:
+    """Filter out other peers' hire posts under the same offer thread."""
+    if provider_user_id is not None and entry.user_id != provider_user_id:
+        return False
+    if looks_like_peer_hire_request(entry.message_text or ""):
+        return False
+    return True
+
+
+def pick_provider_result(
+    snapshot: DiscussionSnapshot,
+    hw4: Hw4State,
+    *,
+    agent_user_id: int | None,
+) -> tuple[DiscussionEntry | None, list[int]]:
+    """
+    Choose the next plausible provider deliverable under the hired offer.
+
+    Returns (result_or_none, noise_entry_ids). Noise ids should be marked seen
+    without treating them as accepted work (other peers hiring the same provider).
+    """
+    provider_id = hw4.selected_provider_entry_id
+    request_id = hw4.request_reply_id
+    if provider_id is None or request_id is None:
+        return None, []
+
+    # Resolve provider author if missing from memory (older delegations).
+    provider_user_id = hw4.selected_provider_user_id
+    if provider_user_id is None:
+        offer_entry = next((e for e in snapshot.entries if e.id == provider_id), None)
+        if offer_entry is not None:
+            provider_user_id = offer_entry.user_id
+
+    noise: list[int] = []
+    candidates = [
+        e
+        for e in snapshot.entries
+        if e.parent_id == provider_id
+        and e.id != request_id
+        and e.id not in hw4.provider_results_seen
+        and (agent_user_id is None or e.user_id != agent_user_id)
+        and e.id != hw4.correction_reply_id
+        and e.id > request_id
+    ]
+    candidates.sort(key=lambda e: e.id)
+    for entry in candidates:
+        if is_plausible_provider_result(entry, provider_user_id=provider_user_id):
+            return entry, noise
+        noise.append(entry.id)
+    return None, noise
 
 
 def extract_python_test_blocks(text: str) -> list[str]:

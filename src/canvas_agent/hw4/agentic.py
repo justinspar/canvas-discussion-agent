@@ -17,7 +17,7 @@ from canvas_agent.hw4.instructions import (
     HW4_FULL_CREDIT_PLAYBOOK,
 )
 from canvas_agent.hw4.phases import Hw4Idle, Hw4PlannedWrite
-from canvas_agent.hw4.sanitize_peer import neutralize_injection
+from canvas_agent.hw4.sanitize_peer import neutralize_injection, pick_provider_result
 from canvas_agent.models import (
     AcceptedWorkRecord,
     AgentState,
@@ -246,18 +246,13 @@ def _memory_block(
         and hw4.acknowledgment_id is None
         and hw4.selected_provider_entry_id is not None
     ):
-        results = [
-            e
-            for e in snapshot.entries
-            if e.parent_id == hw4.selected_provider_entry_id
-            and e.id != hw4.request_reply_id
-            and e.id not in hw4.provider_results_seen
-            and (state.agent_user_id is None or e.user_id != state.agent_user_id)
-            and e.id > (hw4.request_reply_id or 0)
-        ]
-        results.sort(key=lambda e: e.id)
-        if results:
-            result = results[0]
+        result, noise_ids = pick_provider_result(
+            snapshot, hw4, agent_user_id=state.agent_user_id
+        )
+        for nid in noise_ids:
+            if nid not in hw4.provider_results_seen:
+                hw4.provider_results_seen.append(nid)
+        if result is not None and result.id not in hw4.provider_results_seen:
             outcome = verify.verify_provider_result(
                 result.message_text or "", src_root=src_root
             )
@@ -279,6 +274,7 @@ def _memory_block(
                     checked_at=_utcnow(),
                 )
             )
+            hw4.provider_results_seen.append(result.id)
             if outcome.accepted and hw4.accepted_work is None:
                 path = use.apply_accepted_tests(outcome, repo_root=repo_root)
                 if path or outcome.accepted:
@@ -487,6 +483,11 @@ def decide_next(
         if parent_id is None:
             return Hw4Idle(phase="agentic", rationale="delegate_missing_parent")
         meta["provider_entry_id"] = int(parent_id)
+        provider_entry = next(
+            (e for e in snapshot.entries if e.id == int(parent_id)), None
+        )
+        if provider_entry is not None and provider_entry.user_id is not None:
+            meta["provider_user_id"] = int(provider_entry.user_id)
         hours = meta_in.get("deadline_hours") or 48
         try:
             hours = float(hours)
