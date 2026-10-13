@@ -419,8 +419,11 @@ def decide_next(
             parent_id = int(parent_id)
         except (TypeError, ValueError):
             return Hw4Idle(phase="agentic", rationale="llm_bad_parent_id")
-    # Keep HTML structure; neutralize only known injection phrases.
-    message = neutralize_injection(str(data.get("message") or "")).strip()
+    # Neutralize injection phrases only — never truncate outbound drafts here
+    # (default neutralize cap is for inbound peer text). Output guard enforces length.
+    message = neutralize_injection(
+        str(data.get("message") or ""), max_chars=None
+    ).strip()
     if not message:
         return Hw4Idle(phase="agentic", rationale="llm_empty_message")
     rationale = str(data.get("rationale") or intent)[:400]

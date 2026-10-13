@@ -71,6 +71,51 @@ def test_agentic_posts_offer_when_needed() -> None:
     assert client.calls == 1
 
 
+def test_agentic_does_not_truncate_long_serve_message() -> None:
+    long_body = "Finding one. " + ("Detail about injection and idempotency. " * 200)
+    assert len(long_body) > 5000
+    payload = {
+        "action": "post",
+        "intent": "serve",
+        "kind": "reply",
+        "parent_id": 10,
+        "message": long_body,
+        "rationale": "serve peer",
+        "meta": {"request_entry_id": 77, "mode": "report"},
+    }
+    client = _FakeClient(json.dumps(payload))
+    state = AgentState(
+        agent_user_id=100,
+        hw4=Hw4State(
+            offer_status=OfferStatus.VERIFIED,
+            offer_entry_id=10,
+            offer_verified=True,
+        ),
+    )
+    action = decide_next(
+        state,
+        _snap(
+            DiscussionEntry(
+                id=10,
+                user_id=100,
+                parent_id=None,
+                message_text="SERVICE OFFER: Agent Red-Team Service",
+            ),
+            DiscussionEntry(
+                id=77,
+                user_id=200,
+                parent_id=10,
+                message_text="Please red-team my agent with tools and memory.",
+            ),
+        ),
+        llm_client=client,
+        llm_model="bedrock/claude-sonnet-5",
+    )
+    assert isinstance(action, Hw4PlannedWrite)
+    assert len(action.message) > 5000
+    assert not action.message.endswith("…")
+
+
 def test_agentic_abstain() -> None:
     client = _FakeClient(
         json.dumps(

@@ -11,7 +11,7 @@ from canvas_agent.canvas.parse import (
 )
 from canvas_agent.models import AdvisorDecision, WriteKind
 
-MAX_MESSAGE_LEN = 8000
+MAX_MESSAGE_LEN = 12000
 _CONTROL_LINE_RE = re.compile(
     r"COURSE-TEAM\s+CONTROL\s*:",
     re.IGNORECASE,
