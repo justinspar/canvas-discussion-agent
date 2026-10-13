@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "canvas-agent"
 version = "0.1.0"
-description = "Autonomous Canvas discussion agent for MIT AI Studio"
+description = "Homework 4 Agent Services agent for MIT Canvas (AI Studio)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

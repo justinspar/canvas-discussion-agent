@@ -477,7 +477,7 @@ def on_write_confirmed(
         hw4.offer_verified = True
         hw4.offer_fingerprint = content_fingerprint(planned.message, None)
     elif kind == "other":
-        # Agentic free-form write: track phase only
+        # Agentic write outside named intents: track phase only
         pass
     elif kind == "offer_clarification":
         hw4.offer_clarification_id = canvas_entry_id
