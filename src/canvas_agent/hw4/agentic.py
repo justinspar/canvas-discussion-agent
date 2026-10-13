@@ -337,7 +337,7 @@ def _memory_block(
                 "entry_id": c.entry_id,
                 "score": c.score,
                 "title": c.title_snippet,
-                "excerpt": (c.offer_excerpt or "")[:400],
+                "excerpt": (c.offer_excerpt or "")[:2000],
             }
             for c in candidates[:8]
         ],

@@ -123,7 +123,9 @@ def rank_providers(
             {
                 "entry_id": c.get("entry_id"),
                 "title": neutralize_injection(str(c.get("title") or ""))[:160],
-                "excerpt": neutralize_injection(str(c.get("excerpt") or ""))[:700],
+                "excerpt": neutralize_injection(
+                    str(c.get("excerpt") or ""), max_chars=2500
+                )[:2000],
             }
         )
     system = (

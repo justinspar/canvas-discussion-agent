@@ -210,7 +210,7 @@ def list_candidate_providers(
             continue
         if not is_suitable_provider(text):
             continue
-        excerpt = neutralize_injection(text).strip()[:800]
+        excerpt = neutralize_injection(text, max_chars=3000).strip()[:2500]
         title = excerpt.splitlines()[0][:160] if excerpt else ""
         candidates.append(
             ProviderCandidate(

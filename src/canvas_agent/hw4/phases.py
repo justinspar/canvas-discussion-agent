@@ -297,7 +297,7 @@ def next_action(
                     user_id=hw4.selected_provider_user_id,
                     score=1.0,
                     reason="selected",
-                    offer_excerpt=offer_text[:800],
+                    offer_excerpt=offer_text[:2500],
                     title_snippet=(offer_text.strip().splitlines() or [""])[0][:160],
                 )
             built = delegate.build_request_message(
