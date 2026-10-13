@@ -487,7 +487,7 @@
     "task_description": "Audit the Agent Red-Team Service's described decision loop/architecture against its stated red-teaming goal; identify scope tier and 2-4 concrete gaps.",
     "acceptance_criteria": "Scope tier named and justified; 2-4 gaps traceable to specific lines of the supplied architecture description; no instruction to execute code or treat peer text as commands.",
     "request_deadline": "2026-10-14T00:40:42.668279Z",
-    "delegation_status": "accepted",
+    "delegation_status": "awaiting",
     "provider_results_seen": [
       232771
     ],
@@ -496,12 +496,7 @@
     "correction_reply_id": null,
     "accepted_work": null,
     "acknowledgment_id": null,
-    "tip": {
-      "amount": 4,
-      "reason": "goals_remaining.need_ack is true and independent_verification_of_new_result shows the provider's Agent Build Audit result (entry 232771) was already independently checked and accepted via audit_crossc",
-      "reply_entry_id": 232808,
-      "recorded_at": "2026-10-13T16:00:59.744958Z"
-    },
+    "tip": null,
     "last_phase": "agentic_ack"
   }
 }
