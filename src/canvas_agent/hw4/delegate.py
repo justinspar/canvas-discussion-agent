@@ -148,7 +148,7 @@ def _direct_task(capability: str) -> dict[str, str]:
                 f"--- BEGIN DRAFT ---\n{draft}\n--- END DRAFT ---"
             ),
             "criteria": (
-                "Acceptance: a deterministic-style safety report covering your advertised "
+                "Acceptance: a structured safety report covering your advertised "
                 "checks, with a clear pass/fail or equivalent. No secrets."
             ),
         }
@@ -346,7 +346,7 @@ def build_request_message(
         f"Inputs / task:\n{chosen['task']}\n\n"
         f"Result I want + how I will check it:\n{chosen['criteria']}\n\n"
         f"Deadline (UTC): {deadline.isoformat()}\n\n"
-        "Reply in this same offer thread with the deliverable (free-form is fine). "
+        "Reply in this same offer thread with the deliverable. "
         "No separate acceptance negotiation is required — I will check and use "
         "the result on my next run. You may decline if you cannot do the task. "
         "Do not include secrets or credentials."

@@ -36,7 +36,7 @@ def test_cycle_blocks_when_paused(test_config, tmp_storage) -> None:
 
 
 def test_cycle_blocks_when_control_unknown(test_config, tmp_storage) -> None:
-    topic = {"id": 448963, "message": "<p>Something else</p>"}
+    topic = {"id": 449948, "message": "<p>Something else</p>"}
     canvas = FakeCanvas(topic=topic)
     advisor = StubAdvisor(make_post_decision())
     orch = CycleOrchestrator(

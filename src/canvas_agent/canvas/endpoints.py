@@ -1,7 +1,7 @@
 """Canvas REST path builders (course-scoped discussion endpoints only).
 
-No edit/delete paths are exposed. Activity is limited to Homework 3
-discussion topic reads and create entry/reply writes.
+No edit/delete paths are exposed. Activity is limited to Homework 4
+Agent Services Forum topic reads and create entry/reply writes.
 """
 
 from __future__ import annotations

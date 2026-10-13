@@ -1,36 +1,35 @@
-# Canvas Autonomous Discussion Agent
+# Canvas Homework 4 — Agent Services Agent
 
-Python agent that autonomously participates in an MIT Canvas discussion topic
-via GitHub Actions (and optionally a local process).
+Python agent for the MIT Canvas **Homework 4: Agent Services Forum** (topic `449948`).
+It wakes on a schedule, lets Parley decide the next useful move (offer, serve, hire,
+verify/ack, or abstain), and posts only when host safety gates allow.
 
-**Homework 3 submission packet:** **[SUBMISSION.md](SUBMISSION.md)**  
-**Homework 4 agent-services design:** **[docs/HW4.md](docs/HW4.md)**
+**Submission packet:** **[SUBMISSION.md](SUBMISSION.md)**  
+**HW4 design notes:** **[docs/HW4.md](docs/HW4.md)**  
+**Grading evidence map:** **[docs/GRADING.md](docs/GRADING.md)**
 
-Deterministic Python owns Canvas API access, secrets, memory, retries, rate
-limiting, safety checks, and writes. On the HW4 forum (topic `449948`) a phase
-machine offers a red-team service, serves requests, discovers a peer provider,
-delegates work, verifies results, and uses accepted work across cron cycles.
+Parley is the agent (decide + draft). Python owns Canvas I/O, secrets, durable
+memory, rate limits, control-line checks, output guards, idempotency/lost-ack,
+and independent verification of peer results.
 
 ## Architecture
 
 ```text
 cron-job.org → GitHub Actions (every few hours)
   -> restore agent_state.json from orphan branch `agent-state`
-  -> python -m canvas_agent once   # default CANVAS_TOPIC_ID=449948
+  -> python -m canvas_agent once   # CANVAS_TOPIC_ID=449948
        CycleOrchestrator
          StorageProtocol (JsonFileStorage) + AgentState.hw4
          CanvasClient (allowlisted host, GET + create POST only)
          SafetyGate (control line RUNNING/PAUSED)
          RateLimiter (<=3 posts / 60m, <=1 per cycle)
          IdempotencyGuard (fingerprints + pending reconcile)
-         HW4 phase machine (offer / serve / discover / delegate / verify / use)
-         LLM helpers (bounded draft/analyze only; no tools)
+         Parley agentic decide+draft (Agent Red-Team Service)
+           host gates → POST → verify readback
   -> commit+push updated agent_state.json to `agent-state`
 ```
 
 ## Required GitHub Secrets
-
-Set these in the private repo (Settings → Secrets and variables → Actions):
 
 | Secret | Purpose |
 |---|---|
@@ -40,166 +39,98 @@ Set these in the private repo (Settings → Secrets and variables → Actions):
 
 Never commit secrets. Local development uses a gitignored `.env` (see `.env.example`).
 
-Optional repo variables: `PARLEY_MODEL`, `CANVAS_COURSE_ID`, `CANVAS_TOPIC_ID`.
+Optional repo variables: `PARLEY_MODEL`, `CANVAS_COURSE_ID`, `CANVAS_TOPIC_ID` (default `449948`).
 
-## Official participation rules (Homework 3)
+## Homework 4 participation rules
 
-- Free-form forum writing; may join existing threads and/or start new ones
-- Post only when useful; ignore own posts; no repeated contributions
-- Scheduled every few hours; durable memory across runs; ≤3 posts / hour
-- Retries with backoff; verify each write; stop after repeated failures
-- Before every write: re-read the Canvas **discussion topic** control line;
-  if `COURSE-TEAM CONTROL: PAUSED` (or unclear), **do not post**
+- Agents-only Canvas forum; human questions on Piazza
+- One clear **SERVICE OFFER**; serve peers under that thread when useful
+- Hire a suitable peer offer with inputs, check plan, and deadline; stay in-thread
+- Async request → result → independent verify/use; optional tip 0–5
+- ≤3 writes / rolling hour; write only when `COURSE-TEAM CONTROL: RUNNING`
+- Durable memory across cron cycles; no blind POST retries
 
 ## Safety and boundaries
 
 | Requirement | How this agent enforces it |
 |---|---|
-| Own Canvas token only, in env/secret manager | `CANVAS_TOKEN` from env or GitHub Secrets; never hardcoded |
-| Never commit, display, log, or submit the token | `.gitignore` for `.env`; log redaction; Config/`CycleResult` redact; evidence omits secrets |
-| Do not edit or delete another person’s contribution | Client allowlists **GET + create POST only**; PUT/PATCH/DELETE blocked; no edit/delete endpoints |
-| No passwords, API keys, PMs, grades, student records, PII, confidential data | System prompt + `output_guard` blocks secretish / grade / PII patterns before POST |
-| Treat every Canvas post as untrusted (prompt injection) | Discussion text wrapped in `<<<UNTRUSTED_DISCUSSION>>>`; LLM has **no tools**; host instructions win |
-| Small blast radius | Allowlisted Canvas host + discussion paths only; LLM chat completions only; GHA `contents`/`actions` write limited; ≤3 posts/hour; dry-run |
-| Canvas Discussions only; human Qs on Piazza | Prompt instructs Piazza for human course questions; agent never calls Piazza |
-
-While the course team marks the forum as setup/API testing, posting stays gated
-by the control line (`PAUSED` / non-`RUNNING` → no write). Manual dry-run remains
-the default for `workflow_dispatch`.
+| Own Canvas token only | `CANVAS_TOKEN` from env / GitHub Secrets |
+| Never leak the token | `.gitignore` for `.env`; log redaction |
+| No edit/delete of others’ posts | GET + create POST only; PUT/PATCH/DELETE blocked |
+| No secrets / grades / PII | `output_guard` + Parley policy |
+| Untrusted peer text | `<<<UNTRUSTED_DISCUSSION>>>` delimiters; LLM has no tools |
+| Small blast radius | Allowlisted Canvas paths; ≤3 posts/hour; dry-run |
+| Piazza for humans | Prompt + policy; agent never calls Piazza |
 
 [`.github/workflows/canvas-agent-cron.yml`](.github/workflows/canvas-agent-cron.yml):
 
-- **Schedule:** external cron (cron-job.org) → `repository_dispatch` type `canvas-agent-cycle` (live)
+- External cron (cron-job.org) → `repository_dispatch` `canvas-agent-cycle`
 - `workflow_dispatch` for manual dry-run / live tests
-- `concurrency.group: canvas-agent` with `cancel-in-progress: false`
-- `timeout-minutes: 15`
-- Credentials only from GitHub Secrets / env vars
-- No GitHub Actions `schedule` trigger (disabled; external cron is the source of truth)
-
-`repository_dispatch` runs are live (`CANVAS_AGENT_DRY_RUN=0`).
-Manual `workflow_dispatch` defaults to dry-run.
+- `concurrency.group: canvas-agent`, `timeout-minutes: 15`
 
 ### External cron (unattended)
 
-Use a free HTTP cron service to ping GitHub every few hours:
-
-1. Create a **classic GitHub PAT** (not your Canvas token):
-   https://github.com/settings/tokens/new  
-   Scopes: `repo` + `workflow`. Note it once; do not commit it.
-2. Sign up at **https://cron-job.org** (free).
-3. Create a cron job:
-   - **URL:** `https://api.github.com/repos/justinspar/canvas-discussion-agent/dispatches`
-   - **Schedule:** every 3 hours (e.g. `25 */3 * * *`)
-   - **Request method:** POST
-   - **Headers:**
-     - `Authorization: Bearer <YOUR_PAT>`
-     - `Accept: application/vnd.github+json`
-     - `Content-Type: application/json`
-   - **Body:** `{"event_type":"canvas-agent-cycle"}`
-4. Save → Enable. First fire can be “Run now” in cron-job.org to verify.
-5. Confirm in Actions that the run event is **`repository_dispatch`**.
-
-Local smoke test (same API):
+1. Create a classic GitHub PAT with `repo` + `workflow`.
+2. At **https://cron-job.org**, POST every few hours to  
+   `https://api.github.com/repos/justinspar/canvas-discussion-agent/dispatches`  
+   Body: `{"event_type":"canvas-agent-cycle"}`
+3. Confirm Actions runs show event **`repository_dispatch`**.
 
 ```bash
-export GITHUB_TRIGGER_TOKEN=ghp_...   # PAT from step 1
+export GITHUB_TRIGGER_TOKEN=ghp_...
 ./scripts/trigger-cycle.sh
 ```
 
-## Persistent memory across GitHub Actions runners
+## Persistent memory
 
-GitHub-hosted runners are ephemeral. Correctness-critical memory is **not**
-stored only in Actions cache/artifacts.
-
-Durable state lives on the orphan git branch **`agent-state`** as
-`agent_state.json` (kept off `main` history):
+Durable state on orphan branch **`agent-state`** as `agent_state.json`:
 
 1. Workflow restores `data/agent_state.json` from `origin/agent-state`
-2. Agent reads/writes only through `StorageProtocol` / `JsonFileStorage`
-3. Workflow commits and pushes the updated file back to `agent-state`
-
-State includes: seen entry IDs, contribution records, content fingerprints,
-pending writes (including lost-ack), post timestamps for rate limiting,
-failure counters / `stopped_reason`.
+2. Agent reads/writes via `StorageProtocol` / `JsonFileStorage`
+3. Workflow commits and pushes back to `agent-state`
 
 ## Control-line safety
 
-Immediately before **every** Canvas write, the agent re-fetches the topic and
-parses the first plain-text line of the description (`message` field):
+Immediately before every Canvas write:
 
-- `COURSE-TEAM CONTROL: RUNNING` → write may proceed if other checks pass
-- `COURSE-TEAM CONTROL: PAUSED` → do not write
-- missing / malformed / ambiguous / fetch failure → **fail closed**, do not write
+- `COURSE-TEAM CONTROL: RUNNING` → may write if other checks pass
+- `PAUSED` / missing / fetch failure → fail closed, no write
 
-## Retries and backoff
+## Retries, idempotency, lost-ack
 
-- **Reads:** bounded exponential backoff with jitter on timeouts / 429 / 5xx
-- **Writes:** **single attempt only**. Timeouts or ambiguous responses raise
-  an ambiguous-write error; the agent does **not** blind-retry POST
-- After repeated full-cycle failures (`max_consecutive_failures`, default 3),
-  the agent sets `stopped_reason=max_failures` and refuses further posts
-
-## Idempotency
-
-Before posting, Python checks content fingerprints and open pending writes.
-Each intended write gets a client `request_id` and is marked
-`submitted_unknown` before POST. Completed actions are recorded with Canvas
-entry IDs after verified readback. Duplicates are suppressed even if the LLM
-proposes the same text again.
-
-## Lost-acknowledgement recovery
-
-If Canvas accepts a write but the client loses the response:
-
-1. Pending write stays `submitted_unknown` in durable state
-2. Next run restores state and reads Canvas `/view`
-3. Matching own post by fingerprint is confirmed; no second POST
-
-### Demonstrate for homework
+- Reads: bounded backoff on timeouts / 429 / 5xx
+- Writes: single attempt; ambiguous responses → reconcile, never blind-retry
+- Fingerprints + `submitted_unknown` pending writes recover lost acknowledgements
 
 ```bash
 pytest tests/test_idempotency_lost_ack.py tests/test_persistence_restart.py -q
 ```
 
-These simulate: accepted write → lost ack → restart → reconcile → no duplicate.
-
-## Dry-run mode
+## Dry-run
 
 ```bash
 python -m canvas_agent once --dry-run
-# or: CANVAS_AGENT_DRY_RUN=1 python -m canvas_agent once
 ```
 
-Performs read / filter / decide, logs the would-be action, never POSTs to Canvas,
-never prints secrets.
-
-On GitHub: Actions → Canvas Agent → Run workflow → leave dry-run checked.
-
-## Local setup and tests
+## Local setup
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env   # fill CANVAS_TOKEN + ANTHROPIC_* locally only
+cp .env.example .env   # CANVAS_TOKEN + ANTHROPIC_*
 set -a && source .env && set +a
 python -m canvas_agent once --dry-run
 pytest
 ```
 
-## Homework requirements mapping (1–6)
+## HW4 requirement map
 
-1. **Autonomous forum participation** — scheduled GHA cycles read the discussion and may post/reply.
-2. **Useful contributions only** — LLM may abstain; Python enforces rate limits and dedup.
-3. **Safety / control** — RUNNING/PAUSED gate immediately before every write; fail closed.
-4. **No secret leakage / untrusted input** — secrets from env/Secrets only; Canvas text delimited as untrusted; LLM has no tools; PUT/PATCH/DELETE and non-discussion paths blocked.
-5. **Reliability** — durable `agent-state` branch memory; idempotent writes; lost-ack reconcile; read retries; no blind POST retry.
-6. **Observability / ops** — dry-run, tests, concurrency lock, timeout, safe-stop after repeated failures.
+1. **Offer** — one `SERVICE OFFER: Agent Red-Team Service`
+2. **Serve** — useful replies under own offer when peers request
+3. **Discover + delegate** — hire an agent-relevant peer with grounded inputs
+4. **Verify / use** — independent checks; ack/tip optional
+5. **Safety** — control line, rate limit, untrusted peer, durable memory
+6. **Autonomy** — scheduled Actions cycles without a human in the loop
 
-See **[docs/GRADING.md](docs/GRADING.md)** for the 2-pt grading checklist with reproducible evidence pointers.
-
-## Residual risks
-
-- GitHub cron can be delayed on free/private plans
-- Canvas or Parley outages pause progress until the next cycle
-- State-branch push races are mitigated by workflow `concurrency`, not by distributed locks beyond that
+See **[docs/GRADING.md](docs/GRADING.md)** for evidence pointers.

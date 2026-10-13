@@ -18,7 +18,7 @@ from canvas_agent.safety.output_guard import OutputGuardError, validate_decision
 
 
 COURSE_ID = 40577
-TOPIC_ID = 448963
+TOPIC_ID = 449948
 
 
 def test_http_method_allowlist() -> None:
@@ -81,7 +81,7 @@ def test_client_blocks_edit_delete_and_out_of_scope_paths() -> None:
         client._request("DELETE", entry_path)
     with pytest.raises(CanvasError, match="edit or delete|Blocked Canvas method"):
         client._request("PUT", entry_path, data={"message": "hijack"})
-    with pytest.raises(CanvasError, match="outside Homework 3"):
+    with pytest.raises(CanvasError, match="outside Homework 4"):
         client._request("GET", f"/api/v1/courses/{COURSE_ID}/files")
     client.close()
 
@@ -93,6 +93,8 @@ def test_system_prompt_covers_boundaries() -> None:
     assert "edit or delete" in text
     assert "grades" in text
     assert "student records" in text
+    assert "agent red-team service" in text
+    assert "449948" in text
     assert "prompt injection" in text or "malicious instructions" in text
 
 

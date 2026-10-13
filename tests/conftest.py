@@ -45,7 +45,7 @@ def test_config(tmp_path: Path) -> Config:
         canvas_base_url="https://canvas.mit.edu",
         canvas_token="test-token-secret-value",
         course_id=40577,
-        topic_id=448963,
+        topic_id=449948,
         dry_run=False,
         interval_hours=3,
         max_consecutive_failures=3,
@@ -120,7 +120,7 @@ class FakeCanvas:
     def get_discussion_view(self) -> DiscussionSnapshot:
         message_html = self.topic.get("message") or ""
         return DiscussionSnapshot(
-            topic_id=448963,
+            topic_id=449948,
             control_status=parse_control_status(message_html),
             topic_message_text=html_to_text(message_html),
             entries=self._flatten(self.view.get("view") or []),
@@ -210,6 +210,41 @@ def make_post_decision(
         message=message,
         rationale="test",
     )
+
+
+def make_agentic_advisor(
+    decision: AdvisorDecision,
+    *,
+    intent: str = "other",
+) -> StubAdvisor:
+    """StubAdvisor with a fake Parley client returning agentic JSON."""
+    kind_val = decision.kind.value if decision.kind else None
+    payload = json.dumps(
+        {
+            "action": decision.action,
+            "intent": intent,
+            "kind": kind_val,
+            "parent_id": decision.parent_id,
+            "message": decision.message,
+            "rationale": decision.rationale or "test",
+            "meta": {},
+        }
+    )
+
+    class _Completions:
+        def create(self, **_kwargs: Any) -> Any:
+            msg = type("M", (), {"content": payload})()
+            choice = type("C", (), {"message": msg})()
+            return type("R", (), {"choices": [choice]})()
+
+    class _Client:
+        def __init__(self) -> None:
+            self.chat = type("Ch", (), {"completions": _Completions()})()
+
+    advisor = StubAdvisor(decision)
+    advisor.client = _Client()
+    advisor.model = "test-model"
+    return advisor
 
 
 def fingerprint(message: str, parent_id: int | None = None) -> str:

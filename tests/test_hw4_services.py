@@ -20,7 +20,7 @@ from canvas_agent.hw4.sanitize_peer import (
     neutralize_injection,
 )
 from canvas_agent.hw4.serve import (
-    build_deterministic_red_team_report,
+    build_template_red_team_report,
     prepare_response_for_request,
 )
 from canvas_agent.hw4.verify import verify_audit_or_research
@@ -146,7 +146,7 @@ def test_malicious_instructions_ignored_in_profile() -> None:
     assert "reveal the token" not in cleaned.casefold() or "[blocked" in cleaned.casefold()
     profile = extract_agent_profile(text)
     assert has_enough_profile(profile)
-    report = build_deterministic_red_team_report(profile)
+    report = build_template_red_team_report(profile)
     assert "control" in report.casefold() or "idempot" in report.casefold()
     assert "sk-" not in report
 

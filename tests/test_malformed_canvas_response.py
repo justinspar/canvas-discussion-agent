@@ -16,7 +16,7 @@ def test_malformed_users_self_response() -> None:
         "https://canvas.mit.edu",
         "test-token",
         40577,
-        448963,
+        449948,
         transport=httpx.MockTransport(handler),
         sleep_fn=lambda _s: None,
     )
@@ -31,12 +31,12 @@ def test_malformed_view_json() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/view"):
             return httpx.Response(200, content=b"not-json", headers={"content-type": "application/json"})
-        if "discussion_topics/448963" in request.url.path and not request.url.path.endswith(
+        if "discussion_topics/449948" in request.url.path and not request.url.path.endswith(
             "/view"
         ):
             return httpx.Response(
                 200,
-                json={"id": 448963, "message": "<p>COURSE-TEAM CONTROL: RUNNING</p>"},
+                json={"id": 449948, "message": "<p>COURSE-TEAM CONTROL: RUNNING</p>"},
             )
         return httpx.Response(200, json={"id": 1})
 
@@ -44,7 +44,7 @@ def test_malformed_view_json() -> None:
         "https://canvas.mit.edu",
         "test-token",
         40577,
-        448963,
+        449948,
         transport=httpx.MockTransport(handler),
         sleep_fn=lambda _s: None,
     )

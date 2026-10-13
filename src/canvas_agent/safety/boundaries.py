@@ -1,4 +1,4 @@
-"""Hard blast-radius limits for Homework 3 agent activity.
+"""Hard blast-radius limits for Homework 4 agent activity.
 
 The agent may only use its own Canvas token (from env/secrets), talk to the
 configured Canvas host and LLM host, and create discussion entries/replies.
@@ -60,5 +60,5 @@ def assert_allowed_method(method: str) -> None:
 def assert_allowed_canvas_path(path: str, course_id: int, topic_id: int) -> None:
     if not is_allowed_canvas_path(path, course_id, topic_id):
         raise PermissionError(
-            "Blocked Canvas path outside Homework 3 discussion scope"
+            "Blocked Canvas path outside Homework 4 discussion scope"
         )

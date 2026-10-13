@@ -148,73 +148,56 @@ class CycleOrchestrator:
                 state.seen_entry_ids.append(entry.id)
         self.storage.save(state)
 
-        # Homework 4 topic uses the services state machine; HW3 free-form remains
-        # available only when CANVAS_TOPIC_ID points at a non-HW4 forum.
+        # Homework 4 Agent Services Forum: Parley decides+drafts; host gates writes.
         hw4_phase: str | None = None
         hw4_verification: str | None = None
         planned: Hw4PlannedWrite | None = None
         parent_user_id: int | None = None
 
-        if self.config.topic_id == 449948:
-            llm_client = getattr(self.advisor, "client", None)
-            llm_model = getattr(self.advisor, "model", None)
-            src_root = Path(__file__).resolve().parent
-            repo_root = src_root.parents[1]
-            if llm_client is not None and llm_model:
-                logger.info("HW4 agentic Parley decide+draft model=%s", llm_model)
-                action = hw4_agentic.decide_next(
-                    state,
-                    snapshot,
-                    llm_client=llm_client,
-                    llm_model=llm_model,
-                    src_root=src_root,
-                    repo_root=repo_root,
-                )
-            else:
-                logger.warning(
-                    "HW4 Parley unavailable; using deterministic phase fallback"
-                )
-                action = next_action(
-                    state,
-                    snapshot,
-                    llm_client=llm_client,
-                    llm_model=llm_model,
-                    src_root=src_root,
-                    repo_root=repo_root,
-                )
-            self.storage.save(state)  # persist discovery/reconcile side effects
-            if isinstance(action, Hw4Idle):
-                logger.info("HW4 idle phase=%s: %s", action.phase, action.rationale)
-                return CycleResult(
-                    abstained=True,
-                    skipped_reason=f"hw4_idle:{action.rationale}",
-                    action="abstain",
-                    rationale=action.rationale,
-                    hw4_phase=action.phase,
-                    hw4_verification_outcome=action.verification_outcome,
-                )
-            planned = action
-            hw4_phase = planned.phase
-            decision = AdvisorDecision(
-                action="post",
-                kind=planned.kind,
-                parent_id=planned.parent_id,
-                message=planned.message,
-                rationale=planned.rationale,
+        llm_client = getattr(self.advisor, "client", None)
+        llm_model = getattr(self.advisor, "model", None)
+        src_root = Path(__file__).resolve().parent
+        repo_root = src_root.parents[1]
+        if llm_client is not None and llm_model:
+            logger.info("HW4 agentic Parley decide+draft model=%s", llm_model)
+            action = hw4_agentic.decide_next(
+                state,
+                snapshot,
+                llm_client=llm_client,
+                llm_model=llm_model,
+                src_root=src_root,
+                repo_root=repo_root,
             )
         else:
-            prior_messages = [c.fingerprint[:12] for c in state.contributions]
-            own_texts = [
-                e.message_text
-                for e in snapshot.entries
-                if e.user_id == state.agent_user_id and e.message_text
-            ]
-            decision = self.advisor.decide_and_draft(
+            logger.warning("HW4 Parley unavailable; using offline keyword planner")
+            action = next_action(
+                state,
                 snapshot,
-                agent_user_id=state.agent_user_id,
-                prior_fingerprints=list(state.content_fingerprints),
-                prior_messages=own_texts or prior_messages,
+                llm_client=llm_client,
+                llm_model=llm_model,
+                src_root=src_root,
+                repo_root=repo_root,
             )
+        self.storage.save(state)  # persist discovery/reconcile side effects
+        if isinstance(action, Hw4Idle):
+            logger.info("HW4 idle phase=%s: %s", action.phase, action.rationale)
+            return CycleResult(
+                abstained=True,
+                skipped_reason=f"hw4_idle:{action.rationale}",
+                action="abstain",
+                rationale=action.rationale,
+                hw4_phase=action.phase,
+                hw4_verification_outcome=action.verification_outcome,
+            )
+        planned = action
+        hw4_phase = planned.phase
+        decision = AdvisorDecision(
+            action="post",
+            kind=planned.kind,
+            parent_id=planned.parent_id,
+            message=planned.message,
+            rationale=planned.rationale,
+        )
 
         try:
             decision = validate_decision(decision)

@@ -1,16 +1,15 @@
 """Lost-acknowledgement recovery: Canvas accepted write, client never got response."""
 
 from canvas_agent.cycle import CycleOrchestrator
-from canvas_agent.llm.openai_advisor import StubAdvisor
 from canvas_agent.models import AdvisorDecision, PendingWriteStatus
 from canvas_agent.policy.idempotency import fingerprint_for
-from tests.conftest import FakeCanvas, make_post_decision
+from tests.conftest import FakeCanvas, make_agentic_advisor, make_post_decision
 
 
 def test_recovery_from_lost_acknowledgement(test_config, tmp_storage) -> None:
     message = "Unique contribution about calibration of LLM judges."
     canvas = FakeCanvas(fail_ack_once=True)
-    advisor = StubAdvisor(make_post_decision(message))
+    advisor = make_agentic_advisor(make_post_decision(message), intent="other")
 
     orch = CycleOrchestrator(
         config=test_config, storage=tmp_storage, canvas=canvas, advisor=advisor
@@ -45,14 +44,18 @@ def test_recovery_from_lost_acknowledgement(test_config, tmp_storage) -> None:
 def test_lost_ack_then_abstain_still_records_contribution(test_config, tmp_storage) -> None:
     message = "Another unique lost-ack message about rubric design."
     canvas = FakeCanvas(fail_ack_once=True)
-    advisor = StubAdvisor(make_post_decision(message))
+    advisor = make_agentic_advisor(make_post_decision(message), intent="other")
     orch = CycleOrchestrator(
         config=test_config, storage=tmp_storage, canvas=canvas, advisor=advisor
     )
     orch.run_once()
 
     # Next cycle: advisor abstains; reconcile should still confirm the pending write
-    advisor.decision = AdvisorDecision(action="abstain", rationale="nothing new")
+    abstain = make_agentic_advisor(
+        AdvisorDecision(action="abstain", rationale="nothing new"),
+        intent="other",
+    )
+    orch.advisor = abstain
     result = orch.run_once()
     assert result.abstained is True
     assert len(canvas.posts) == 1

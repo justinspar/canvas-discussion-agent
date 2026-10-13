@@ -1,101 +1,87 @@
-# Grading Evidence Checklist
+# Grading Evidence Checklist (Homework 4)
 
-Map of Homework grading criteria → reproducible proof in this repository.
+Map of Homework 4 Agent Services criteria → reproducible proof in this repository.  
 Repo: https://github.com/justinspar/canvas-discussion-agent
 
-**Full submission write-up with Canvas thread links and Actions evidence:**
-[../SUBMISSION.md](../SUBMISSION.md)
+**Full submission write-up:** [../SUBMISSION.md](../SUBMISSION.md)  
+**Architecture:** [HW4.md](HW4.md)
 
-**Homework 4 agent-services architecture:** [HW4.md](HW4.md)
+## 1. Scheduled autonomous operation
 
-## 1. Scheduled autonomous operation (2 pts)
-
-**Status: fully meet**
+**Status: meet**
 
 Evidence:
 - Workflow: [`.github/workflows/canvas-agent-cron.yml`](../.github/workflows/canvas-agent-cron.yml)
-  - External cron → `repository_dispatch` (`canvas-agent-cycle`) every few hours
-  - No GitHub Actions `schedule` (removed; cron-job.org is the scheduler)
+  - External cron → `repository_dispatch` (`canvas-agent-cycle`)
   - `workflow_dispatch` for manual tests; concurrency + 15m timeout
-- Live runs set `CANVAS_AGENT_DRY_RUN=0` (see README “External cron”)
+- Live runs set `CANVAS_AGENT_DRY_RUN=0`
 - Actions: https://github.com/justinspar/canvas-discussion-agent/actions
 
-Reproduce:
 ```bash
 rg -n "repository_dispatch|concurrency:|timeout-minutes" .github/workflows/canvas-agent-cron.yml
 ```
 
-## 2. Correct Canvas integration + linked free-form participation (2 pts)
+## 2. Correct Canvas integration on the HW4 forum
 
 **Status: meet**
 
 Evidence:
 - Canvas REST client: [`src/canvas_agent/canvas/client.py`](../src/canvas_agent/canvas/client.py)
   - `GET /api/v1/users/self`
-  - `GET .../discussion_topics/448963` and `/view`
+  - `GET .../discussion_topics/449948` and `/view`
   - `POST .../entries` and `POST .../entries/{id}/replies`
-- Default course/topic: `40577` / `448963` in [`config.py`](../src/canvas_agent/config.py)
-- Linked replies via `kind=reply` + `parent_id` (prompts + cycle)
+- Default course/topic: `40577` / `449948` in [`config.py`](../src/canvas_agent/config.py)
+- Structured Canvas HTML on write (`to_canvas_html`)
 
-Reproduce:
 ```bash
-rg -n "create_entry|create_reply|discussion_view|users_self" src/canvas_agent/canvas/
+rg -n "create_entry|create_reply|discussion_view|users_self|449948" src/canvas_agent/
 ```
 
-## 3. Persistent memory, idempotency, and failure recovery (2 pts)
+## 3. Persistent memory, idempotency, and failure recovery
 
-**Status: fully meet**
+**Status: meet**
 
 Evidence:
-- Durable memory on orphan branch `agent-state` (not Actions cache alone)
-- State model: fingerprints, pending writes, post timestamps, failure stop
-- Lost-ack: mark `submitted_unknown` before POST; reconcile on next cycle
-- Writes are **not** blindly retried (`allow_retry=False` on POST)
+- Durable memory on orphan branch `agent-state`
+- Fingerprints, pending writes, post timestamps, failure stop
+- Lost-ack: `submitted_unknown` before POST; reconcile next cycle
+- Writes are not blindly retried (`allow_retry=False` on POST)
 
-Reproduce:
 ```bash
 pytest tests/test_idempotency_lost_ack.py \
        tests/test_persistence_restart.py \
        tests/test_write_no_retry_on_timeout.py \
        tests/test_retry_exhaustion_safe_stop.py -q
-# Inspect durable state branch:
-# https://github.com/justinspar/canvas-discussion-agent/tree/agent-state
 ```
 
-## 4. Useful linked interaction with other agents (2 pts)
+## 4. Agent Services behaviors (offer / hire / verify)
 
-**Status: meet (policy + enforcement)**
+**Status: meet (policy + enforcement + tests)**
 
 Evidence:
-- Advisor prefers peer replies: [`src/canvas_agent/llm/prompts.py`](../src/canvas_agent/llm/prompts.py)
-- Python rejects reply-to-self (`skipped_reason=reply_to_self`) in [`cycle.py`](../src/canvas_agent/cycle.py)
-- Cycle evidence file records `kind` / `parent_id` / `rationale`: `data/last_cycle.json`
-- CI uploads artifact `cycle-evidence` each run
+- Agentic Parley prompt + playbook: [`hw4/agentic.py`](../src/canvas_agent/hw4/agentic.py), [`hw4/instructions.py`](../src/canvas_agent/hw4/instructions.py)
+- Offer identity: `SERVICE OFFER: Agent Red-Team Service` ([`hw4/offer.py`](../src/canvas_agent/hw4/offer.py))
+- Discover/delegate/verify modules + [`tests/test_hw4_services.py`](../tests/test_hw4_services.py)
+- Cycle evidence: `data/last_cycle.json` / Actions artifact `cycle-evidence`
 
-Reproduce:
 ```bash
-pytest tests/test_peer_reply_validation.py -q
-# After an Actions run, download artifact "cycle-evidence" and open last_cycle.json
-# Expect fields like: "kind": "reply", "parent_id": <peer entry id>
+pytest tests/test_hw4_services.py tests/test_hw4_agentic.py -q
 ```
 
-## 5. Safety controls, evidence, and reproducibility (2 pts)
+## 5. Safety controls, evidence, and reproducibility
 
-**Status: fully meet**
+**Status: meet**
 
 Evidence:
-- Control line re-checked immediately before every write; PAUSED/UNKNOWN/fetch fail → no POST
-- Dry-run never writes; secrets only via GitHub Secrets / env; log redaction
-- Injection delimiters + output guard (credentials, grades, PII, banned snippets)
-- Canvas blast radius: host allowlist + discussion-path allowlist + GET/POST only
-  ([`safety/boundaries.py`](../src/canvas_agent/safety/boundaries.py)); no edit/delete
+- Control line re-checked immediately before every write
+- Dry-run never writes; secrets only via GitHub Secrets / env
+- Injection delimiters + output guard (allowlisted HTML; strip scripts)
+- Canvas blast radius: [`safety/boundaries.py`](../src/canvas_agent/safety/boundaries.py)
 - Prompts: untrusted-input rules + Piazza for human course questions
-- This document + automated tests + Actions artifacts
 
-Reproduce:
 ```bash
 pytest tests/test_sanitize_injection.py tests/test_boundaries.py tests/test_control_gate.py -q
-python -m canvas_agent once --dry-run   # requires local .env; never posts
+python -m canvas_agent once --dry-run
 rg -n "COURSE-TEAM CONTROL|UNTRUSTED_DISCUSSION|assert_allowed_method|Piazza" src/canvas_agent
 ```
 

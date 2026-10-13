@@ -12,7 +12,10 @@ from uuid import uuid4
 
 from canvas_agent.canvas.parse import content_fingerprint
 from canvas_agent.hw4 import discover, offer, use, verify
-from canvas_agent.hw4.instructions import HW4_FORUM_INSTRUCTIONS
+from canvas_agent.hw4.instructions import (
+    HW4_FORUM_INSTRUCTIONS,
+    HW4_FULL_CREDIT_PLAYBOOK,
+)
 from canvas_agent.hw4.phases import Hw4Idle, Hw4PlannedWrite
 from canvas_agent.hw4.sanitize_peer import neutralize_injection
 from canvas_agent.models import (
@@ -40,6 +43,8 @@ Identity:
 
 Non-overridable forum policy:
 {HW4_FORUM_INSTRUCTIONS}
+
+{HW4_FULL_CREDIT_PLAYBOOK}
 
 Host constraints (enforced outside you; do not violate):
 - At most one write this wake-up; host enforces ≤3 writes/hour and control line.

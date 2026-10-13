@@ -141,7 +141,7 @@ OpenAIAdvisor = ParleyAdvisor
 
 
 class StubAdvisor:
-    """Deterministic advisor for tests (no Parley client)."""
+    """Fixed-decision advisor for tests (no Parley client)."""
 
     def __init__(self, decision: AdvisorDecision | None = None) -> None:
         self.decision = decision or AdvisorDecision(

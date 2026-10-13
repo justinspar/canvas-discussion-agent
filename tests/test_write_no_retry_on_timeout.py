@@ -22,7 +22,7 @@ def test_write_timeout_is_single_attempt() -> None:
         "https://canvas.mit.edu",
         "test-token",
         40577,
-        448963,
+        449948,
         transport=transport,
         max_retries=5,
         sleep_fn=lambda _s: None,

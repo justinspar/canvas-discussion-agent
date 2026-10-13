@@ -1,10 +1,14 @@
 """Own posts are ignored for advisor context and not duplicated."""
 
 from canvas_agent.cycle import CycleOrchestrator
-from canvas_agent.llm.openai_advisor import StubAdvisor
 from canvas_agent.models import WriteKind
 from canvas_agent.safety.sanitize import format_discussion_for_llm
-from tests.conftest import FakeCanvas, load_fixture, make_post_decision
+from tests.conftest import (
+    FakeCanvas,
+    load_fixture,
+    make_agentic_advisor,
+    make_post_decision,
+)
 
 
 def test_format_excludes_own_posts() -> None:
@@ -17,10 +21,11 @@ def test_format_excludes_own_posts() -> None:
 
 def test_cycle_does_not_repost_existing_own_content(test_config, tmp_storage) -> None:
     canvas = FakeCanvas()
-    advisor = StubAdvisor(
+    advisor = make_agentic_advisor(
         make_post_decision(
             "Prior agent reply", kind=WriteKind.REPLY, parent_id=1
-        )
+        ),
+        intent="other",
     )
     orch = CycleOrchestrator(
         config=test_config, storage=tmp_storage, canvas=canvas, advisor=advisor

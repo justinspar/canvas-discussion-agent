@@ -118,8 +118,8 @@ def filter_findings_for_profile(report: str, profile: dict[str, str]) -> str:
     return text or report.strip()
 
 
-def build_deterministic_red_team_report(profile: dict[str, str]) -> str:
-    """Fallback report when LLM unavailable; still tailored by keyword presence."""
+def build_template_red_team_report(profile: dict[str, str]) -> str:
+    """Offline template report when Parley is unavailable; tailored by keywords."""
     joined = " ".join(profile.values())
     low = joined.casefold()
     findings: list[tuple[str, str]] = []
@@ -224,5 +224,5 @@ def prepare_response_for_request(
     if llm_report and llm_report.strip():
         report = filter_findings_for_profile(llm_report.strip(), profile)
     else:
-        report = build_deterministic_red_team_report(profile)
+        report = build_template_red_team_report(profile)
     return report, "report", profile

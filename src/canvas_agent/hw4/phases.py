@@ -1,4 +1,8 @@
-"""HW4 phase machine: decide the single next write (or idle)."""
+"""Offline HW4 keyword planner: decide the single next write (or idle).
+
+Used when Parley is unavailable (unit tests / missing LLM client). Live cycles
+prefer canvas_agent.hw4.agentic.decide_next.
+"""
 
 from __future__ import annotations
 
@@ -220,7 +224,7 @@ def next_action(
                 phase="delegation_exhausted",
                 rationale="no_more_provider_retries",
             )
-        # Always refresh candidates so LLM/deterministic drafting sees current offers.
+        # Always refresh candidates so Parley/offline drafting sees current offers.
         candidates = discover.list_candidate_providers(
             snapshot,
             agent_user_id=state.agent_user_id,

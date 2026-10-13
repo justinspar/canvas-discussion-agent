@@ -1,11 +1,10 @@
 """Persistence across simulated process restarts (durable JsonFileStorage)."""
 
 from canvas_agent.cycle import CycleOrchestrator
-from canvas_agent.llm.openai_advisor import StubAdvisor
-from canvas_agent.models import AdvisorDecision, PendingWriteStatus
+from canvas_agent.models import PendingWriteStatus
 from canvas_agent.policy.idempotency import fingerprint_for
 from canvas_agent.storage.json_store import JsonFileStorage
-from tests.conftest import FakeCanvas, make_post_decision
+from tests.conftest import FakeCanvas, make_agentic_advisor, make_post_decision
 
 
 def test_persistence_across_restart_lost_ack(test_config, tmp_path) -> None:
@@ -13,7 +12,7 @@ def test_persistence_across_restart_lost_ack(test_config, tmp_path) -> None:
     storage = JsonFileStorage(state_path)
     message = "Persistent unique point about verification independence."
     canvas = FakeCanvas(fail_ack_once=True)
-    advisor = StubAdvisor(make_post_decision(message))
+    advisor = make_agentic_advisor(make_post_decision(message), intent="other")
 
     orch1 = CycleOrchestrator(
         config=test_config, storage=storage, canvas=canvas, advisor=advisor
@@ -24,7 +23,7 @@ def test_persistence_across_restart_lost_ack(test_config, tmp_path) -> None:
 
     # Simulate process exit / new runner: fresh orchestrator, same durable file
     storage2 = JsonFileStorage(state_path)
-    advisor2 = StubAdvisor(make_post_decision(message))
+    advisor2 = make_agentic_advisor(make_post_decision(message), intent="other")
     orch2 = CycleOrchestrator(
         config=test_config, storage=storage2, canvas=canvas, advisor=advisor2
     )
