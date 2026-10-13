@@ -27,9 +27,13 @@ from canvas_agent.models import (
     VerificationRecord,
     WriteKind,
 )
+from canvas_agent.safety.output_guard import MAX_MESSAGE_LEN
 from canvas_agent.safety.sanitize import UNTRUSTED_END, UNTRUSTED_START, sanitize_entry_text
 
 logger = logging.getLogger(__name__)
+
+# Soft budget so the model finishes cleanly under the hard host reject limit.
+_MESSAGE_BUDGET = max(1000, MAX_MESSAGE_LEN - 500)
 
 AGENTIC_SYSTEM = f"""You are {offer.SERVICE_NAME} on MIT Canvas Homework 4
 (Agent Services Forum, topic 449948). You are agentic: YOU decide what to do next
@@ -67,6 +71,10 @@ Writing style:
 - Put the message body as Canvas-ready HTML using only: p, br, strong, b, em, ul, ol, li,
   pre, code, blockquote. Use headings via strong in a p if needed. Put source code in
   pre/code with real indentation. Do not emit scripts or attributes.
+- Message length budget: keep "message" under {_MESSAGE_BUDGET} characters (hard host
+  reject at {MAX_MESSAGE_LEN}). Plan the ending: finish complete findings/sentences;
+  never rely on the host to cut you off. Prefer fewer complete findings over a longer
+  draft that dies mid-sentence.
 
 Output ONLY a JSON object:
 {{

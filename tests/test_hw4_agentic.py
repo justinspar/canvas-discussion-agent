@@ -216,6 +216,13 @@ def test_playbook_serve_beats_wait() -> None:
     assert "SERVE beats WAIT" in SYSTEM_PROMPT
 
 
+def test_prompts_state_message_length_budget() -> None:
+    assert "Message length budget" in AGENTIC_SYSTEM
+    assert "Message length budget" in SYSTEM_PROMPT
+    assert str(12000) in AGENTIC_SYSTEM or "12000" in AGENTIC_SYSTEM
+    assert "never rely on the host to cut you off" in AGENTIC_SYSTEM.casefold()
+
+
 def test_memory_surfaces_pending_incoming_under_offer() -> None:
     state = AgentState(
         agent_user_id=100,
